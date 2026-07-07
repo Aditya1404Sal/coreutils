@@ -772,7 +772,7 @@ pub fn path_ends_with_terminator(path: &Path) -> bool {
     #[cfg(unix)]
     use std::os::unix::prelude::OsStrExt;
     #[cfg(target_os = "wasi")]
-    use std::os::wasi::ffi::OsStrExt;
+    use crate::wasi_ffi_compat::OsStrExt;
     path.as_os_str()
         .as_bytes()
         .last()

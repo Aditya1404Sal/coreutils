@@ -148,10 +148,47 @@ use std::iter;
 #[cfg(unix)]
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 #[cfg(target_os = "wasi")]
-use std::os::wasi::ffi::{OsStrExt, OsStringExt};
+use crate::wasi_ffi_compat::{OsStrExt, OsStringExt};
 use std::str;
 use std::str::Utf8Chunk;
 use std::sync::{LazyLock, atomic::Ordering};
+
+/// wasip2 compatibility: `std::os::wasi::ffi` is behind the unstable `wasip2` feature on the
+/// `wasm32-wasip2` target. These shims provide the same OsStr/OsString <-> bytes conversions
+/// via the stable encoded-bytes APIs. On wasi, `OsStr` is raw bytes, so encoded bytes are the
+/// raw bytes and the conversions are lossless.
+#[cfg(target_os = "wasi")]
+pub(crate) mod wasi_ffi_compat {
+    use std::ffi::{OsStr, OsString};
+
+    pub trait OsStrExt {
+        fn as_bytes(&self) -> &[u8];
+        fn from_bytes(bytes: &[u8]) -> &OsStr;
+    }
+    impl OsStrExt for OsStr {
+        fn as_bytes(&self) -> &[u8] {
+            self.as_encoded_bytes()
+        }
+        fn from_bytes(bytes: &[u8]) -> &OsStr {
+            // SAFETY: on wasi, raw bytes are a valid encoded form.
+            unsafe { OsStr::from_encoded_bytes_unchecked(bytes) }
+        }
+    }
+
+    pub trait OsStringExt {
+        fn from_vec(vec: Vec<u8>) -> Self;
+        fn into_vec(self) -> Vec<u8>;
+    }
+    impl OsStringExt for OsString {
+        fn from_vec(vec: Vec<u8>) -> Self {
+            // SAFETY: on wasi, `OsStr` is raw bytes, so any `Vec<u8>` is a valid encoded form.
+            unsafe { OsString::from_encoded_bytes_unchecked(vec) }
+        }
+        fn into_vec(self) -> Vec<u8> {
+            self.into_encoded_bytes()
+        }
+    }
+}
 
 /// Disables the custom signal handlers installed by Rust for stack-overflow handling. With those custom signal handlers processes ignore the first SIGBUS and SIGSEGV signal they receive.
 /// See <https://github.com/rust-lang/rust/blob/8ac1525e091d3db28e67adcbbd6db1e1deaa37fb/src/libstd/sys/unix/stack_overflow.rs#L71-L92> for details.

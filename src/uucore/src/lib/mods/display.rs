@@ -33,7 +33,7 @@ use std::io::{self, BufWriter, Stdout, StdoutLock, Write as _};
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 #[cfg(target_os = "wasi")]
-use std::os::wasi::ffi::OsStrExt;
+use crate::wasi_ffi_compat::OsStrExt;
 
 // These used to be defined here, but they live in their own crate now.
 pub use os_display::{Quotable, Quoted};
