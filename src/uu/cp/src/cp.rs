@@ -1881,6 +1881,12 @@ pub(crate) fn copy_attributes(
             #[cfg(not(unix))]
             let source_perms = source_metadata.permissions();
 
+            // wasip2 has no chmod: `fs::set_permissions` returns "Function not implemented" and
+            // there is no Unix permission model to preserve. Skip it best-effort so `cp -p` / `cp -r`
+            // still copy contents instead of failing on every entry.
+            #[cfg(target_os = "wasi")]
+            let _ = source_perms;
+            #[cfg(not(target_os = "wasi"))]
             fs::set_permissions(dest, source_perms)
                 .map_err(|e| CpError::IoErrContext(e, context.to_owned()))?;
             // FIXME: Implement this for windows as well
