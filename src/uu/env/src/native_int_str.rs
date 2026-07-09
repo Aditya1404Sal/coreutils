@@ -13,7 +13,11 @@
 // this conversion needs to be done only once in the beginning and at the end.
 
 use std::ffi::OsString;
-#[cfg(not(target_os = "windows"))]
+// wasip2 has no `std::os::unix::ffi`; use uucore's stable encoded-bytes shim (the same one
+// uucore itself uses) so the OsStr/OsString <-> bytes conversions below work on wasi.
+#[cfg(target_os = "wasi")]
+use uucore::wasi_ffi_compat::{OsStrExt, OsStringExt};
+#[cfg(all(not(target_os = "windows"), not(target_os = "wasi")))]
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 #[cfg(target_os = "windows")]
 use std::os::windows::prelude::*;

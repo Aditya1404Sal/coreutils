@@ -158,7 +158,7 @@ use std::sync::{LazyLock, atomic::Ordering};
 /// via the stable encoded-bytes APIs. On wasi, `OsStr` is raw bytes, so encoded bytes are the
 /// raw bytes and the conversions are lossless.
 #[cfg(target_os = "wasi")]
-pub(crate) mod wasi_ffi_compat {
+pub mod wasi_ffi_compat {
     use std::ffi::{OsStr, OsString};
 
     pub trait OsStrExt {
