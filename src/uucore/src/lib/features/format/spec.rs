@@ -547,14 +547,14 @@ fn write_padded(
 ) -> Result<(), FormatError> {
     let padlen = width.saturating_sub(text.len());
 
-    // Check if the padding length is too large for formatting
+    // Bounds memory, not the formatter: `write_fill` has no `u16` ceiling (see its docs).
     super::check_width(padlen).map_err(FormatError::IoError)?;
 
     if left {
         writer.write_all(text)?;
-        write!(writer, "{: <padlen$}", "")
+        super::write_fill(&mut writer, b' ', padlen)
     } else {
-        write!(writer, "{: >padlen$}", "")?;
+        super::write_fill(&mut writer, b' ', padlen)?;
         writer.write_all(text)
     }
     .map_err(FormatError::IoError)
@@ -602,6 +602,51 @@ fn eat_number(rest: &mut &[u8], index: &mut usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `write_padded` used to pad through `core::fmt`, which panics above `u16::MAX` since Rust
+    /// 1.88 — while `check_width` only refuses widths past `MAX_FORMAT_WIDTH`.
+    mod write_padded {
+        use super::*;
+
+        fn padded(text: &[u8], width: usize, left: bool) -> Vec<u8> {
+            let mut out = Vec::new();
+            write_padded(&mut out, text, width, left).unwrap();
+            out
+        }
+
+        #[test]
+        fn pads_past_u16_max_on_both_sides() {
+            let width = 70_000;
+            let right = padded(b"x", width, false);
+            assert_eq!(right.len(), width);
+            assert!(right.ends_with(b" x"));
+            let left = padded(b"x", width, true);
+            assert_eq!(left.len(), width);
+            assert!(left.starts_with(b"x "));
+        }
+
+        #[test]
+        fn matches_the_old_core_fmt_padding_below_the_ceiling() {
+            for width in [0_usize, 1, 2, 5, 17] {
+                for text in [&b""[..], &b"x"[..], &b"abc"[..]] {
+                    let padlen = width.saturating_sub(text.len());
+                    let mut want_right = format!("{: >padlen$}", "").into_bytes();
+                    want_right.extend_from_slice(text);
+                    let mut want_left = text.to_vec();
+                    want_left.extend(format!("{: <padlen$}", "").into_bytes());
+                    assert_eq!(padded(text, width, false), want_right);
+                    assert_eq!(padded(text, width, true), want_left);
+                }
+            }
+        }
+
+        #[test]
+        fn still_refuses_past_the_memory_guard() {
+            let mut out = Vec::new();
+            assert!(write_padded(&mut out, b"x", 2_000_000, false).is_err());
+            assert!(out.is_empty(), "nothing is written before the refusal");
+        }
+    }
 
     mod resolve_asterisk_width {
         use super::*;

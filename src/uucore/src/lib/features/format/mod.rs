@@ -133,8 +133,11 @@ impl Display for FormatError {
 /// while still preventing formatter panics.
 const MAX_FORMAT_WIDTH: usize = 1_000_000;
 
-/// Check if a width is too large for formatting.
+/// Check if a width is too large to pad.
 /// Returns an error if the width exceeds MAX_FORMAT_WIDTH.
+///
+/// This bounds *memory*. It is not the formatter's limit: padding goes through [`write_fill`],
+/// which has no width ceiling of its own.
 fn check_width(width: usize) -> std::io::Result<()> {
     if width > MAX_FORMAT_WIDTH {
         Err(std::io::Error::new(
@@ -144,6 +147,27 @@ fn check_width(width: usize) -> std::io::Result<()> {
     } else {
         Ok(())
     }
+}
+
+/// Write `n` copies of the ASCII byte `fill` without feeding `n` into `core::fmt`.
+///
+/// `write!(w, "{: >n$}", "")` panics with "Formatting argument out of range" once a dynamic width
+/// exceeds `u16::MAX`: since Rust 1.88, `core::fmt` stores widths as `u16`. [`check_width`] refuses
+/// widths past [`MAX_FORMAT_WIDTH`] (1,000,000) to cap memory, which is far above that, so every
+/// width in `65_536..=1_000_000` used to pass the check and then panic inside the formatter. On a
+/// `panic = "abort"` target such as `wasm32-wasip2`, that panic is an abort. GNU
+/// `printf '%150000s'` simply pads, so padding must not be subject to the formatter's limit at all.
+///
+/// `num_format::zero_pad_to` already avoids the formatter on the precision path, for the same
+/// reason.
+fn write_fill(mut writer: impl Write, fill: u8, mut n: usize) -> std::io::Result<()> {
+    let chunk = [fill; 256];
+    while n > 0 {
+        let len = n.min(chunk.len());
+        writer.write_all(&chunk[..len])?;
+        n -= len;
+    }
+    Ok(())
 }
 
 /// A single item to format

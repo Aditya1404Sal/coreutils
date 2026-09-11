@@ -724,19 +724,24 @@ fn write_output(
     // Using min() because self.width could be 0, 0usize - 1usize should be avoided
     let remaining_width = width - min(width, sign_indicator.len());
 
-    // Check if the width is too large for formatting
+    // Bounds memory, not the formatter: padding below goes through `pad_to`, which has no `u16`
+    // ceiling (see `super::write_fill`).
     super::check_width(remaining_width)?;
 
     match alignment {
-        NumberAlignment::Left => write!(writer, "{sign_indicator}{s:<remaining_width$}"),
+        NumberAlignment::Left => {
+            writer.write_all(sign_indicator.as_bytes())?;
+            pad_to(&mut writer, &s, remaining_width, b' ', true)
+        }
         NumberAlignment::RightSpace => {
             let is_sign = sign_indicator.starts_with('-') || sign_indicator.starts_with('+'); // When sign_indicator is in ['-', '+']
             if is_sign && remaining_width > 0 {
                 // Make sure sign_indicator is just next to number, e.g. "% +5.1f" 1 ==> $ +1.0
                 let s = sign_indicator + s.as_str();
-                write!(writer, "{s:>width$}", width = remaining_width + 1) // Since we now add sign_indicator and s together, plus 1
+                pad_to(&mut writer, &s, remaining_width + 1, b' ', false) // Since we now add sign_indicator and s together, plus 1
             } else {
-                write!(writer, "{sign_indicator}{s:>remaining_width$}")
+                writer.write_all(sign_indicator.as_bytes())?;
+                pad_to(&mut writer, &s, remaining_width, b' ', false)
             }
         }
         NumberAlignment::RightZero => {
@@ -747,8 +752,33 @@ fn write_output(
                 ("", s.as_str())
             };
             let remaining_width = remaining_width.saturating_sub(prefix.len());
-            write!(writer, "{sign_indicator}{prefix}{rest:0>remaining_width$}")
+            writer.write_all(sign_indicator.as_bytes())?;
+            writer.write_all(prefix.as_bytes())?;
+            pad_to(&mut writer, rest, remaining_width, b'0', false)
         }
+    }
+}
+
+/// Write `s` padded with `fill` to at least `width` characters — what `{s:<width$}`, `{s:>width$}`
+/// and `{s:0>width$}` do, but without feeding `width` into `core::fmt`, which panics above
+/// `u16::MAX` (see `super::write_fill`).
+///
+/// Counts `char`s, as `core::fmt` does, so the output is byte-identical to the formatter's for every
+/// width the formatter accepts.
+fn pad_to(
+    mut writer: impl Write,
+    s: &str,
+    width: usize,
+    fill: u8,
+    left: bool,
+) -> std::io::Result<()> {
+    let pad = width.saturating_sub(s.chars().count());
+    if left {
+        writer.write_all(s.as_bytes())?;
+        super::write_fill(&mut writer, fill, pad)
+    } else {
+        super::write_fill(&mut writer, fill, pad)?;
+        writer.write_all(s.as_bytes())
     }
 }
 
@@ -764,6 +794,93 @@ mod test {
     };
 
     use super::{Formatter, SignedInt};
+
+    /// The alignments by index, constructed fresh each call so the tests need neither `Copy` nor
+    /// `Clone` on `NumberAlignment`.
+    fn alignment(i: usize) -> super::NumberAlignment {
+        match i {
+            0 => super::NumberAlignment::Left,
+            1 => super::NumberAlignment::RightSpace,
+            _ => super::NumberAlignment::RightZero,
+        }
+    }
+
+    fn render(sign: &str, s: &str, width: usize, alignment: super::NumberAlignment) -> Vec<u8> {
+        let mut out = Vec::new();
+        super::write_output(&mut out, sign.to_string(), s.to_string(), width, alignment).unwrap();
+        out
+    }
+
+    /// `write_output` as it was before `pad_to`, kept verbatim as an oracle: the `core::fmt`
+    /// padding it used is the behaviour to preserve, for every width `core::fmt` accepts.
+    fn core_fmt_oracle(sign: &str, s: &str, width: usize, i: usize) -> String {
+        if width == 0 {
+            return format!("{sign}{s}");
+        }
+        let remaining_width = width - width.min(sign.len());
+        match alignment(i) {
+            super::NumberAlignment::Left => format!("{sign}{s:<remaining_width$}"),
+            super::NumberAlignment::RightSpace => {
+                if (sign.starts_with('-') || sign.starts_with('+')) && remaining_width > 0 {
+                    let s = format!("{sign}{s}");
+                    format!("{s:>width$}", width = remaining_width + 1)
+                } else {
+                    format!("{sign}{s:>remaining_width$}")
+                }
+            }
+            super::NumberAlignment::RightZero => {
+                let (prefix, rest) = if s.len() >= 2 && s[..2].eq_ignore_ascii_case("0x") {
+                    (&s[..2], &s[2..])
+                } else {
+                    ("", s)
+                };
+                let remaining_width = remaining_width.saturating_sub(prefix.len());
+                format!("{sign}{prefix}{rest:0>remaining_width$}")
+            }
+        }
+    }
+
+    #[test]
+    fn write_output_is_byte_identical_to_core_fmt_padding() {
+        // "é" is two bytes but one char: `core::fmt` pads by chars, so `pad_to` must too.
+        for sign in ["", "-", "+", " "] {
+            for s in ["42", "0x1f", "0X1F", "3.14", "inf", "é"] {
+                for width in [0, 1, 2, 3, 4, 5, 8, 20] {
+                    for i in 0..3 {
+                        assert_eq!(
+                            String::from_utf8(render(sign, s, width, alignment(i))).unwrap(),
+                            core_fmt_oracle(sign, s, width, i),
+                            "sign={sign:?} s={s:?} width={width} alignment={i}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Every padding path in `write_output` used to panic here: `core::fmt` widths are `u16` since
+    /// Rust 1.88, while `check_width` only refuses widths past `MAX_FORMAT_WIDTH`.
+    #[test]
+    fn write_output_pads_past_u16_max() {
+        let width = 100_000; // well past u16::MAX (65_535), well under MAX_FORMAT_WIDTH
+
+        let left = render("", "7", width, alignment(0));
+        assert_eq!(left.len(), width);
+        assert!(left.starts_with(b"7 "));
+
+        let right = render("", "7", width, alignment(1));
+        assert_eq!(right.len(), width);
+        assert!(right.ends_with(b" 7"));
+
+        let signed = render("+", "7", width, alignment(1));
+        assert_eq!(signed.len(), width);
+        assert!(signed.ends_with(b" +7"));
+
+        let zero = render("", "0xff", width, alignment(2));
+        assert_eq!(zero.len(), width);
+        assert!(zero.starts_with(b"0x00"));
+        assert!(zero.ends_with(b"0ff"));
+    }
 
     #[test]
     fn unsigned_octal() {
