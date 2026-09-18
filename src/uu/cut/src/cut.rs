@@ -1056,10 +1056,25 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
 
     let matches = uucore::clap_localization::handle_clap_result(uu_app(), args)?;
 
+    let mode = mode_from_matches(&matches, diag_args.as_deref())?;
+
+    #[allow(clippy::unwrap_used, reason = "clap provides '-' by default")]
+    let files = matches.get_many::<OsString>(options::FILE).unwrap();
+
+    cut_files(files, &mode);
+
+    Ok(())
+}
+
+/// Builds the cutting mode from parsed arguments. `diag_args` enables caret diagnostics.
+fn mode_from_matches<'a>(
+    matches: &'a ArgMatches,
+    diag_args: Option<&[OsString]>,
+) -> UResult<Mode<'a>> {
     let complement = matches.get_flag(options::COMPLEMENT);
     let only_delimited = matches.get_flag(options::ONLY_DELIMITED);
 
-    let (delimiter, out_delimiter) = get_delimiters(&matches)?;
+    let (delimiter, out_delimiter) = get_delimiters(matches)?;
     let line_ending = LineEnding::from_zero_flag(matches.get_flag(options::ZERO_TERMINATED));
     let suppress_split = matches.get_flag(options::NO_PARTIAL);
     // `--whitespace-delimited[=trimmed]` (`-w`): the optional value selects trimming.
@@ -1067,7 +1082,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         .get_one::<String>(options::WHITESPACE_DELIMITED)
         .is_some();
 
-    let mode_arg = get_mode_arg(&matches)?;
+    let mode_arg = get_mode_arg(matches)?;
     let list = matches
         .get_one::<String>(mode_arg)
         .expect("should be ensured by get_mode_arg");
@@ -1077,7 +1092,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         // caret can be put under the one range that is at fault.
         let (short, long) = mode_arg_names(mode_arg);
         uucore::diagnostics::error_after_report(
-            diag_args.as_deref(),
+            diag_args,
             UUsageError::new(1, e.message.clone()),
             |args, _| {
                 e.render_option_value(
@@ -1146,12 +1161,18 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         _ => unreachable!(),
     };
 
-    #[allow(clippy::unwrap_used, reason = "clap provides '-' by default")]
-    let files = matches.get_many::<OsString>(options::FILE).unwrap();
+    Ok(mode)
+}
 
-    cut_files(files, &mode);
-
-    Ok(())
+/// Process records using the CLI parser and the same cutting rules as `uumain`.
+/// The caller owns input framing and output backpressure; `data` may include its terminator.
+/// No filesystem or process-global standard streams are accessed.
+pub fn cut_record(matches: &ArgMatches, data: &[u8], out: &mut Vec<u8>) -> UResult<()> {
+    match mode_from_matches(matches, None)? {
+        Mode::Bytes(ranges, opts) => cut_chars(data, out, &ranges, &opts, false),
+        Mode::Characters(ranges, opts) => cut_chars(data, out, &ranges, &opts, true),
+        Mode::Fields(ranges, opts) => cut_fields(data, out, &ranges, &opts),
+    }
 }
 
 // Exactly one of the cutting mode arguments `-b`, `-c`, `-f` or `-F` must be

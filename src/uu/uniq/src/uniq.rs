@@ -676,8 +676,22 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         .map(|mut fi| (fi.next(), fi.next()))
         .unwrap_or_default();
 
-    let skip_fields_modern: Option<usize> = opt_parsed(options::SKIP_FIELDS, &matches)?;
-    let skip_chars_modern: Option<usize> = opt_parsed(options::SKIP_CHARS, &matches)?;
+    let uniq = uniq_from_matches(&matches, skip_fields_old, skip_chars_old)?;
+
+    uniq.write_uniq(
+        open_input_file(in_file_name)?,
+        open_output_file(out_file_name)?,
+    )
+}
+
+/// Builds the configuration shared by `uumain` and [`UniqStream`].
+fn uniq_from_matches(
+    matches: &ArgMatches,
+    skip_fields_old: Option<usize>,
+    skip_chars_old: Option<usize>,
+) -> UResult<Uniq> {
+    let skip_fields_modern: Option<usize> = opt_parsed(options::SKIP_FIELDS, matches)?;
+    let skip_chars_modern: Option<usize> = opt_parsed(options::SKIP_CHARS, matches)?;
 
     let uniq = Uniq {
         repeats_only: matches.get_flag(options::REPEATED)
@@ -685,11 +699,11 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         uniques_only: matches.get_flag(options::UNIQUE),
         all_repeated: matches.contains_id(options::ALL_REPEATED)
             || matches.contains_id(options::GROUP),
-        delimiters: get_delimiter(&matches),
+        delimiters: get_delimiter(matches),
         show_counts: matches.get_flag(options::COUNT),
         skip_fields: skip_fields_modern.or(skip_fields_old),
         slice_start: skip_chars_modern.or(skip_chars_old),
-        slice_stop: opt_parsed(options::CHECK_CHARS, &matches)?,
+        slice_stop: opt_parsed(options::CHECK_CHARS, matches)?,
         ignore_case: matches.get_flag(options::IGNORE_CASE),
         zero_terminated: matches.get_flag(options::ZERO_TERMINATED),
         is_c_locale: Uniq::is_c_locale(),
@@ -702,10 +716,109 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         ));
     }
 
-    uniq.write_uniq(
-        open_input_file(in_file_name)?,
-        open_output_file(out_file_name)?,
-    )
+    Ok(uniq)
+}
+
+/// Incremental equivalent of `write_uniq`, keeping one group and its comparison metadata.
+/// Input records exclude their terminator; output uses the CLI-selected line terminator.
+pub struct UniqStream {
+    config: Uniq,
+    current: Option<Vec<u8>>,
+    meta: LineMeta,
+    count: usize,
+    printed: bool,
+    line_out: Vec<u8>,
+}
+
+impl UniqStream {
+    /// Parse the existing CLI options, including obsolete skip syntax.
+    pub fn from_args(args: impl uucore::Args) -> UResult<(Self, Vec<OsString>)> {
+        let (args, skip_fields_old, skip_chars_old) = handle_obsolete(args);
+        let matches = uu_app()
+            .try_get_matches_from(args)
+            .map_err(map_clap_errors)?;
+        let files = matches
+            .get_many::<OsString>(ARG_FILES)
+            .map(|files| files.cloned().collect())
+            .unwrap_or_default();
+        let uniq = uniq_from_matches(&matches, skip_fields_old, skip_chars_old)?;
+
+        Ok((
+            Self {
+                config: uniq,
+                current: None,
+                meta: LineMeta::default(),
+                count: 0,
+                printed: false,
+                line_out: Vec::new(),
+            },
+            files,
+        ))
+    }
+    /// The byte separating records.
+    pub fn delimiter(&self) -> u8 {
+        self.config.get_line_terminator()
+    }
+    /// Advance by one record, emitting a finished group or repeated group members.
+    pub fn push(&mut self, record: Vec<u8>, output: &mut Vec<u8>) -> UResult<()> {
+        let mut next_meta = LineMeta::default();
+        self.config.build_meta(&record, &mut next_meta);
+        if let Some(current) = &self.current {
+            if self
+                .config
+                .keys_are_equal(current, &self.meta, &record, &next_meta)
+            {
+                if self.config.all_repeated {
+                    self.config.write_line(
+                        output,
+                        &mut self.line_out,
+                        current,
+                        self.count,
+                        self.printed,
+                    )?;
+                    self.printed = true;
+                    self.current = Some(record);
+                    self.meta = next_meta;
+                }
+                self.count += 1;
+                return Ok(());
+            }
+            self.emit(output)?;
+        }
+        self.current = Some(record);
+        self.meta = next_meta;
+        self.count = 1;
+        Ok(())
+    }
+    fn emit(&mut self, output: &mut Vec<u8>) -> UResult<()> {
+        if let Some(current) = &self.current
+            && ((self.count == 1 && !self.config.repeats_only)
+                || (self.count > 1 && !self.config.uniques_only))
+        {
+            self.config.write_line(
+                output,
+                &mut self.line_out,
+                current,
+                self.count,
+                self.printed,
+            )?;
+            self.printed = true;
+        }
+        Ok(())
+    }
+    /// Finish the final group and any requested trailing separator.
+    pub fn finish(mut self, output: &mut Vec<u8>) -> UResult<()> {
+        self.emit(output)?;
+        if self.printed
+            && matches!(
+                self.config.delimiters,
+                Delimiters::Append | Delimiters::Both
+            )
+        {
+            output.push(self.delimiter());
+        }
+        Ok(())
+    }
 }
 
 pub fn uu_app() -> Command {
