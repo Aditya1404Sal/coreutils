@@ -679,6 +679,111 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     Ok(())
 }
 
+/// Process records using the CLI parser and the same cutting rules as `uumain`.
+/// The caller owns input framing and output backpressure; `data` may include its terminator.
+/// No filesystem or process-global standard streams are accessed.
+pub fn cut_record(matches: &ArgMatches, data: &[u8], out: &mut Vec<u8>) -> UResult<()> {
+    let complement = matches.get_flag(options::COMPLEMENT);
+    let only_delimited = matches.get_flag(options::ONLY_DELIMITED);
+
+    let (delimiter, out_delimiter) = get_delimiters(&matches)?;
+    let line_ending = LineEnding::from_zero_flag(matches.get_flag(options::ZERO_TERMINATED));
+
+    // Only one, and only one of cutting mode arguments, i.e. `-b`, `-c`, `-f`,
+    // is expected. The number of those arguments is used for parsing a cutting
+    // mode and handling the error cases.
+    let mode_args_count = [
+        matches.indices_of(options::BYTES),
+        matches.indices_of(options::CHARACTERS),
+        matches.indices_of(options::FIELDS),
+    ]
+    .into_iter()
+    .map(|indices| indices.unwrap_or_default().count())
+    .sum();
+
+    let mode_parse = match (
+        mode_args_count,
+        matches.get_one::<String>(options::BYTES),
+        matches.get_one::<String>(options::CHARACTERS),
+        matches.get_one::<String>(options::FIELDS),
+    ) {
+        (1, Some(byte_ranges), None, None) => {
+            list_to_ranges(byte_ranges, complement).map(|ranges| {
+                Mode::Bytes(
+                    ranges,
+                    Options {
+                        out_delimiter,
+                        line_ending,
+                        field_opts: None,
+                    },
+                )
+            })
+        }
+
+        (1, None, Some(char_ranges), None) => {
+            list_to_ranges(char_ranges, complement).map(|ranges| {
+                Mode::Characters(
+                    ranges,
+                    Options {
+                        out_delimiter,
+                        line_ending,
+                        field_opts: None,
+                    },
+                )
+            })
+        }
+
+        (1, None, None, Some(field_ranges)) => {
+            list_to_ranges(field_ranges, complement).map(|ranges| {
+                Mode::Fields(
+                    ranges,
+                    Options {
+                        out_delimiter,
+                        line_ending,
+                        field_opts: Some(FieldOptions {
+                            delimiter,
+                            only_delimited,
+                        }),
+                    },
+                )
+            })
+        }
+
+        (2.., _, _, _) => Err(translate!("cut-error-multiple-mode-args")),
+        _ => Err(translate!("cut-error-missing-mode-arg")),
+    };
+
+    let mode_parse = match mode_parse {
+        Err(_) => mode_parse,
+        Ok(mode) => match mode {
+            Mode::Bytes(_, _) | Mode::Characters(_, _)
+                if matches.contains_id(options::DELIMITER) =>
+            {
+                Err(translate!("cut-error-delimiter-only-with-fields"))
+            }
+            Mode::Bytes(_, _) | Mode::Characters(_, _)
+                if matches.get_flag(options::WHITESPACE_DELIMITED) =>
+            {
+                Err(translate!("cut-error-whitespace-only-with-fields"))
+            }
+            Mode::Bytes(_, _) | Mode::Characters(_, _)
+                if matches.get_flag(options::ONLY_DELIMITED) =>
+            {
+                Err(translate!("cut-error-only-delimited-only-with-fields"))
+            }
+            _ => Ok(mode),
+        },
+    };
+
+    let mode = mode_parse.map_err(|e| USimpleError::new(1, e))?;
+    match mode {
+        Mode::Bytes(ranges, opts) | Mode::Characters(ranges, opts) => {
+            cut_bytes(data, out, &ranges, &opts)
+        }
+        Mode::Fields(ranges, opts) => cut_fields(data, out, &ranges, &opts),
+    }
+}
+
 pub fn uu_app() -> Command {
     Command::new("cut")
         .version(uucore::crate_version!())

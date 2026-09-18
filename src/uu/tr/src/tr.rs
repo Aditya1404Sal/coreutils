@@ -3,7 +3,8 @@
 // For the full copyright and license information, please view the LICENSE
 // file that was distributed with this source code.
 
-mod operation;
+/// Stateful byte transformations for embedders that own their input/output streams.
+pub mod operation;
 mod simd;
 mod unicode_table;
 
@@ -145,6 +146,107 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     flush_output(&mut locked_stdout)?;
 
     Ok(())
+}
+
+/// Parse the original command options into a stateful byte translator.
+///
+/// Embedders can incrementally feed bytes without rebinding process input/output.
+/// Diagnostics use the same uucore error handling as the standalone command.
+pub fn translator(args: impl uucore::Args) -> UResult<Box<dyn SymbolTranslator + Send>> {
+    let matches = uucore::clap_localization::handle_clap_result(uu_app(), args)?;
+
+    let delete_flag = matches.get_flag(options::DELETE);
+    let complement_flag = matches.get_flag(options::COMPLEMENT);
+    let squeeze_flag = matches.get_flag(options::SQUEEZE);
+    let truncate_set1_flag = matches.get_flag(options::TRUNCATE_SET1);
+
+    // Ultimately this should be OsString, but we might want to wait for the
+    // pattern API on OsStr
+    let sets: Vec<_> = matches
+        .get_many::<OsString>(options::SETS)
+        .into_iter()
+        .flatten()
+        .map(ToOwned::to_owned)
+        .collect();
+
+    if sets.is_empty() {
+        return Err(UUsageError::new(1, translate!("tr-error-missing-operand")));
+    }
+
+    let sets_len = sets.len();
+
+    if !(delete_flag || squeeze_flag) && sets_len == 1 {
+        return Err(UUsageError::new(
+            1,
+            translate!("tr-error-missing-operand-translating", "set" => sets[0].quote()),
+        ));
+    }
+
+    if delete_flag && squeeze_flag && sets_len == 1 {
+        return Err(UUsageError::new(
+            1,
+            translate!("tr-error-missing-operand-deleting-squeezing", "set" => sets[0].quote()),
+        ));
+    }
+
+    if sets_len > 1 {
+        if delete_flag && !squeeze_flag {
+            let op = sets[1].quote();
+            let msg = if sets_len == 2 {
+                translate!("tr-error-extra-operand-deleting-without-squeezing", "operand" => op)
+            } else {
+                translate!("tr-error-extra-operand-simple", "operand" => op)
+            };
+            return Err(UUsageError::new(1, msg));
+        }
+        if sets_len > 2 {
+            let op = sets[2].quote();
+            let msg = translate!("tr-error-extra-operand-simple", "operand" => op);
+            return Err(UUsageError::new(1, msg));
+        }
+    }
+
+    if let Some(first) = sets.first() {
+        let slice = os_str_as_bytes(first)?;
+        let trailing_backslashes = slice.iter().rev().take_while(|&&c| c == b'\\').count();
+        if trailing_backslashes % 2 == 1 {
+            // The trailing backslash has a non-backslash character before it.
+            show!(USimpleError::new(
+                0,
+                translate!("tr-warning-unescaped-backslash")
+            ));
+        }
+    }
+
+    // According to the man page: translating only happens if deleting or if a second set is given
+    let translating = !delete_flag && sets.len() > 1;
+    let mut sets_iter = sets.iter().map(OsString::as_os_str);
+    let (set1, set2) = Sequence::solve_set_characters(
+        os_str_as_bytes(sets_iter.next().unwrap_or_default())?,
+        os_str_as_bytes(sets_iter.next().unwrap_or_default())?,
+        complement_flag,
+        // if we are not translating then we don't truncate set1
+        truncate_set1_flag && translating,
+        translating,
+    )?;
+
+    Ok(if delete_flag {
+        if squeeze_flag {
+            Box::new(DeleteOperation::new(set1).chain(SqueezeOperation::new(set2)))
+        } else {
+            Box::new(DeleteOperation::new(set1))
+        }
+    } else if squeeze_flag {
+        if sets_len == 1 {
+            Box::new(SqueezeOperation::new(set1))
+        } else {
+            Box::new(
+                TranslateOperation::new(set1, set2.clone())?.chain(SqueezeOperation::new(set2)),
+            )
+        }
+    } else {
+        Box::new(TranslateOperation::new(set1, set2)?)
+    })
 }
 
 pub fn uu_app() -> Command {
