@@ -15,11 +15,52 @@
 use std::ffi::OsString;
 #[cfg(unix)]
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-#[cfg(target_os = "wasi")]
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
 use std::os::wasi::ffi::{OsStrExt, OsStringExt};
+#[cfg(all(target_os = "wasi", target_env = "p2"))]
+use wasip2_ffi::{OsStrExt, OsStringExt};
 #[cfg(windows)]
 use std::os::windows::prelude::*;
 use std::{borrow::Cow, ffi::OsStr};
+
+// `std::os::wasi::ffi` is unstable on wasip2. `OsStr` is raw bytes there, so the stable
+// encoded-bytes APIs provide the same conversions.
+#[cfg(all(target_os = "wasi", target_env = "p2"))]
+mod wasip2_ffi {
+    use std::ffi::{OsStr, OsString};
+
+    pub trait OsStrExt {
+        fn as_bytes(&self) -> &[u8];
+        fn from_bytes(bytes: &[u8]) -> &OsStr;
+    }
+
+    impl OsStrExt for OsStr {
+        fn as_bytes(&self) -> &[u8] {
+            self.as_encoded_bytes()
+        }
+
+        fn from_bytes(bytes: &[u8]) -> &OsStr {
+            // SAFETY: on wasi, any byte sequence is a valid `OsStr` encoding.
+            unsafe { OsStr::from_encoded_bytes_unchecked(bytes) }
+        }
+    }
+
+    pub trait OsStringExt {
+        fn from_vec(vec: Vec<u8>) -> Self;
+        fn into_vec(self) -> Vec<u8>;
+    }
+
+    impl OsStringExt for OsString {
+        fn from_vec(vec: Vec<u8>) -> Self {
+            // SAFETY: on wasi, any byte sequence is a valid `OsString` encoding.
+            unsafe { OsString::from_encoded_bytes_unchecked(vec) }
+        }
+
+        fn into_vec(self) -> Vec<u8> {
+            self.into_encoded_bytes()
+        }
+    }
+}
 
 #[cfg(not(windows))]
 use u8 as NativeIntCharU;
