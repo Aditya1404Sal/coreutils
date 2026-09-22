@@ -417,9 +417,31 @@ static UTIL_NAME: LazyLock<String> = LazyLock::new(|| {
         .into_owned()
 });
 
+thread_local! {
+    /// The utility an embedder is running on this thread; see [`set_embedded_util`].
+    static EMBEDDED_UTIL: std::cell::Cell<Option<&'static str>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Run `name` in-process: for a host, such as a shell, that calls several utilities' `uumain`
+/// one after another on the same thread instead of running each as its own process.
+///
+/// There `argv[0]` names the host, not the utility, and the localization a utility's `main`
+/// sets up never runs. After this call [`util_name`] and [`execution_phrase`] report `name`,
+/// and the thread's localizer holds `name`'s strings, replacing the previous utility's.
+pub fn set_embedded_util(name: &'static str) {
+    EMBEDDED_UTIL.with(|util| util.set(Some(name)));
+    let _ = locale::setup_localization(name);
+}
+
+/// The utility set by [`set_embedded_util`] on this thread, if any.
+pub(crate) fn embedded_util() -> Option<&'static str> {
+    EMBEDDED_UTIL.with(std::cell::Cell::get)
+}
+
 /// Derive the utility name.
 pub fn util_name() -> &'static str {
-    &UTIL_NAME
+    embedded_util().unwrap_or_else(|| UTIL_NAME.as_str())
 }
 
 static EXECUTION_PHRASE: LazyLock<String> = LazyLock::new(|| {
@@ -436,7 +458,7 @@ static EXECUTION_PHRASE: LazyLock<String> = LazyLock::new(|| {
 
 /// Derive the complete execution phrase for "usage".
 pub fn execution_phrase() -> &'static str {
-    &EXECUTION_PHRASE
+    embedded_util().unwrap_or_else(|| EXECUTION_PHRASE.as_str())
 }
 
 /// Args contains arguments passed to the utility.
