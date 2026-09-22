@@ -742,11 +742,8 @@ impl EnvAppData {
                         // host runs uumain in-process.
                         let formatter = uucore::clap_localization::ErrorFormatter::new("env");
                         let code = formatter.print_error(&e, 125);
-                        let _ = writeln!(
-                            stderr(),
-                            "env: {}",
-                            translate!("env-error-use-s-shebang")
-                        );
+                        let _ =
+                            writeln!(stderr(), "env: {}", translate!("env-error-use-s-shebang"));
                         return Err(uucore::error::USimpleError::new(code, ""));
                     }
                 }
