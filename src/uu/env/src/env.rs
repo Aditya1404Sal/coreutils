@@ -738,15 +738,16 @@ impl EnvAppData {
                     clap::error::ErrorKind::DisplayHelp
                     | clap::error::ErrorKind::DisplayVersion => return Err(e.into()),
                     _ => {
-                        // Use ErrorFormatter directly to handle error with shebang message callback
+                        // Report, add the shebang hint, and return rather than exit: an embedding
+                        // host runs uumain in-process.
                         let formatter = uucore::clap_localization::ErrorFormatter::new("env");
-                        formatter.print_error_and_exit_with_callback(&e, 125, || {
-                            let _ = writeln!(
-                                stderr(),
-                                "env: {}",
-                                translate!("env-error-use-s-shebang")
-                            );
-                        });
+                        let code = formatter.print_error(&e, 125);
+                        let _ = writeln!(
+                            stderr(),
+                            "env: {}",
+                            translate!("env-error-use-s-shebang")
+                        );
+                        return Err(uucore::error::USimpleError::new(code, ""));
                     }
                 }
             }

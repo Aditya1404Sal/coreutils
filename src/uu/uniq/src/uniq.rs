@@ -663,9 +663,10 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
                 // Let caller handle help/version
                 return Err(map_clap_errors(clap_error));
             }
-            // Use ErrorFormatter directly to handle error
+            // Report and return rather than exit: an embedding host runs uumain in-process.
             let formatter = uucore::clap_localization::ErrorFormatter::new("uniq");
-            formatter.print_error_and_exit_with_callback(&clap_error, 1, || {});
+            let code = formatter.print_error(&clap_error, 1);
+            return Err(uucore::error::USimpleError::new(code, ""));
         }
     };
 
