@@ -11,7 +11,7 @@ mkdir-help-context = like -Z, or if CTX is specified then set the SELinux or SMA
 
 # Error messages
 mkdir-error-empty-directory-name = cannot create directory '': No such file or directory
-mkdir-error-file-exists = { $path }: File exists
+mkdir-error-file-exists = cannot create directory { $path }: File exists
 mkdir-error-failed-to-create-tree = failed to create whole tree
 mkdir-error-cannot-set-permissions = cannot set permissions { $path }
 mkdir-error-cannot-create-directory = cannot create directory '{ $path }': { $error }

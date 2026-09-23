@@ -142,7 +142,41 @@ impl<'a> ErrorFormatter<'a> {
     }
 
     /// Handle unknown argument errors
+    /// A usage error as GNU words it: `util: message`, then where to read more.
+    fn print_gnu_usage_error(&self, message: &str) {
+        let _ = writeln!(
+            stderr(),
+            "{util}: {message}\nTry '{util} --help' for more information.",
+            util = self.util_name
+        );
+    }
+
+    /// A missing operand, as GNU reports it: after the last operand given, if it is one.
+    pub fn print_missing_operand(&self, last: Option<&str>, exit_code: i32) -> i32 {
+        let message = match last {
+            Some(last) if last == "-" || !last.starts_with('-') => {
+                format!("missing operand after '{last}'")
+            }
+            _ => "missing operand".to_owned(),
+        };
+        self.print_gnu_usage_error(&message);
+        exit_code
+    }
+
+    /// An unknown option, as GNU reports it: `invalid option -- 'x'` for a letter,
+    /// `unrecognized option '--xyz'` for a long option.
     fn handle_unknown_argument(&self, err: &Error, exit_code: i32) -> i32 {
+        if let Some(invalid_arg) = err.get(ContextKind::InvalidArg) {
+            let arg = invalid_arg.to_string();
+            if arg.starts_with("--") {
+                self.print_gnu_usage_error(&format!("unrecognized option '{arg}'"));
+                return exit_code;
+            }
+            if let Some(letter) = arg.strip_prefix('-').and_then(|rest| rest.chars().next()) {
+                self.print_gnu_usage_error(&format!("invalid option -- '{letter}'"));
+                return exit_code;
+            }
+        }
         if let Some(invalid_arg) = err.get(ContextKind::InvalidArg) {
             let arg_str = invalid_arg.to_string();
             let error_word = translate!("common-error");
@@ -473,12 +507,22 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
-    cmd.try_get_matches_from(itr).map_err(|e| {
+    let args: Vec<OsString> = itr.into_iter().map(Into::into).collect();
+    // GNU names the last operand given when one is missing: `missing operand after 'x'`.
+    let last = args
+        .get(1..)
+        .and_then(<[OsString]>::last)
+        .map(|arg| arg.to_string_lossy().into_owned());
+    cmd.try_get_matches_from(args).map_err(|e| {
         if e.exit_code() == 0 {
             e.into() // Preserve help/version
         } else {
             let formatter = ErrorFormatter::new(crate::util_name());
-            let code = formatter.print_error(&e, exit_code);
+            let code = if e.kind() == ErrorKind::MissingRequiredArgument {
+                formatter.print_missing_operand(last.as_deref(), exit_code)
+            } else {
+                formatter.print_error(&e, exit_code)
+            };
             USimpleError::new(code, "")
         }
     })
