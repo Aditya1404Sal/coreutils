@@ -70,6 +70,10 @@ pub(crate) struct LongFormat {
     pub(crate) author: bool,
     pub(crate) group: bool,
     pub(crate) owner: bool,
+    // Only read by `display_uname`/`display_group`'s `#[cfg(unix)]` bodies (getpwuid/getgrgid
+    // have no WASI backend, hence the `#[cfg(not(unix))]` fallback right below them that never
+    // looks at this) -- matches `ListState`'s own `#[cfg_attr(not(unix), allow(dead_code))]`.
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) numeric_uid_gid: bool,
 }
 
