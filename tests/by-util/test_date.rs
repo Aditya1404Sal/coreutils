@@ -553,10 +553,12 @@ fn test_date_error_echoes_input_verbatim() {
 fn test_date_set_permissions_error() {
     if !(geteuid().is_root() || uucore::os::is_wsl_1()) {
         let result = new_ucmd!()
+            .env("TZ", "UTC")
             .arg("--set")
             .arg("2020-03-11 21:45:00+08:00")
             .fails();
-        result.no_stdout();
+        // As GNU does, the date is printed even though setting it failed.
+        result.stdout_is("Wed Mar 11 13:45:00 UTC 2020\n");
         assert!(result.stderr_str().starts_with("date: cannot set date: "));
     }
 }
@@ -570,7 +572,8 @@ fn test_date_set_hyphen_prefixed_values() {
 
         for date_str in test_cases {
             let result = new_ucmd!().arg("--set").arg(date_str).fails();
-            result.no_stdout();
+            // As GNU does, the date is printed even though setting it failed.
+            assert!(!result.stdout_str().is_empty(), "no date printed for '{date_str}'");
             // permission error, not argument parsing error
             assert!(
                 result.stderr_str().starts_with("date: cannot set date: "),

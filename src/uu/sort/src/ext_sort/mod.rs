@@ -17,4 +17,4 @@ pub use threaded::ext_sort;
 mod wasi;
 #[cfg(target_os = "wasi")]
 // `self::` needed to disambiguate from the `wasi` crate
-pub use self::wasi::ext_sort;
+pub use self::wasi::{check_input, ext_sort, merge_inputs};

@@ -351,7 +351,7 @@ fn parse_military_timezone_with_offset(s: &str) -> Option<(i32, DayDelta)> {
 pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     let matches = uucore::clap_localization::handle_clap_result(uu_app(), args)?;
 
-    let date_source = if let Some(date_os) = matches.get_one::<OsString>(OPT_DATE) {
+    let mut date_source = if let Some(date_os) = matches.get_one::<OsString>(OPT_DATE) {
         // Convert OsString to String, handling invalid UTF-8 with GNU-compatible error
         let date = date_os.to_str().ok_or_else(|| DateError::InvalidDate {
             date: operand_for_error(date_os),
@@ -430,10 +430,13 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         }
     };
 
+    // Like GNU, `-s` prints the date it set, and still does when setting it fails.
+    let mut set_error = None;
     if let Some(input) = matches.get_one::<String>(OPT_SET) {
         match parse_date(input, &now, DebugOptions::new(debug_mode, true), false) {
             Ok(ParsedDateTime::InRange(date)) => {
-                return set_system_datetime(convert_for_set(date, utc));
+                set_error = set_system_datetime(convert_for_set(date, utc)).err();
+                date_source = DateSource::Human(input.clone());
             }
             Ok(ParsedDateTime::Extended(_)) | Err(_) => {
                 return Err(Box::new(DateError::InvalidDate {
@@ -683,7 +686,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     }
 
     stdout.flush().map_err(DateError::Write)?;
-    Ok(())
+    set_error.map_or(Ok(()), Err)
 }
 
 pub fn uu_app() -> Command {
@@ -1346,9 +1349,15 @@ fn parse_date<S: AsRef<str>>(
     }
 }
 
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(any(unix, windows, target_os = "wasi")))]
 fn get_clock_resolution() -> Timestamp {
     unimplemented!("getting clock resolution not implemented (unsupported target)");
+}
+
+#[cfg(target_os = "wasi")]
+fn get_clock_resolution() -> Timestamp {
+    // WASI's wall clock reports nanoseconds; GNU prints the same 1ns on Linux.
+    Timestamp::constant(0, 1)
 }
 
 #[cfg(all(unix, not(target_os = "redox")))]
@@ -1385,9 +1394,22 @@ fn get_clock_resolution() -> Timestamp {
     Timestamp::constant(0, 100)
 }
 
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(any(unix, windows, target_os = "wasi")))]
 fn set_system_datetime(_date: Zoned) -> UResult<()> {
     unimplemented!("setting date not implemented (unsupported target)");
+}
+
+#[cfg(target_os = "wasi")]
+/// WASI cannot set the system clock; fail as `date -s` does for an unprivileged user. (An
+/// `io::Error` from `EPERM` would print as "Permission denied" here, so the text is spelled out.)
+fn set_system_datetime(_date: Zoned) -> UResult<()> {
+    Err(uucore::error::USimpleError::new(
+        1,
+        format!(
+            "{}: Operation not permitted",
+            translate!("date-error-cannot-set-date")
+        ),
+    ))
 }
 
 /// Convert a parsed date for the system clock.

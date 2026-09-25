@@ -2763,6 +2763,10 @@ fn exec(
     tmp_dir: &mut TmpDirWrapper,
 ) -> UResult<()> {
     if settings.merge {
+        // WASI has no threads, and the threaded merger reads each input on one.
+        #[cfg(target_os = "wasi")]
+        return ext_sort::merge_inputs(files, settings, output);
+        #[cfg(not(target_os = "wasi"))]
         merge::merge(files, settings, output, tmp_dir)
     } else if settings.check {
         if files.len() > 1 {
@@ -2771,6 +2775,9 @@ fn exec(
                 translate!("sort-only-one-file-allowed-with-c"),
             ))
         } else {
+            #[cfg(target_os = "wasi")]
+            return ext_sort::check_input(files.first().unwrap(), settings);
+            #[cfg(not(target_os = "wasi"))]
             check::check(files.first().unwrap(), settings)
         }
     } else {
