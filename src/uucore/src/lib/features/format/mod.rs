@@ -174,7 +174,14 @@ impl Display for FormatError {
 /// Rust's formatter will panic when trying to allocate memory for very large widths.
 /// This limit is somewhat arbitrary but should be well above any practical use case
 /// while still preventing formatter panics.
-const MAX_FORMAT_WIDTH: usize = 1_000_000;
+///
+/// GNU/bash `printf` has no such cap at all (a width is bounded only by available memory,
+/// or by C `int` range in bash's own builtin); this exists purely so an adversarial width
+/// fails cleanly instead of aborting the process. It is set well above the widths a real
+/// script constructs a padded field with (bash agent conformance exercises up to 10_000_000
+/// bytes; see FA-031), while staying small enough that satisfying it can never itself
+/// exhaust memory.
+const MAX_FORMAT_WIDTH: usize = 64 * 1024 * 1024;
 
 /// Check if a width is too large for formatting.
 /// Returns an error if the width exceeds MAX_FORMAT_WIDTH.
