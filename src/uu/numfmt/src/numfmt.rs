@@ -84,7 +84,7 @@ fn format_and_write(
             }
             Err(_) => Err(translate!(
                 "numfmt-error-invalid-number",
-                "input" => escape_line(line).quote()
+                "input" => escape_line(line)
             )
             .into()),
         }

@@ -185,7 +185,7 @@ fn detailed_error_message(s: &str, unit: Unit, unit_separator: &str) -> Option<S
     }
 
     let number_prefix = find_valid_number_with_suffix(s, unit)
-        .ok_or(translate!("numfmt-error-invalid-number", "input" => s.quote()))
+        .ok_or(translate!("numfmt-error-invalid-number", "input" => s))
         .ok()?;
 
     if number_prefix == "." {
@@ -193,7 +193,7 @@ fn detailed_error_message(s: &str, unit: Unit, unit_separator: &str) -> Option<S
     }
 
     if number_prefix.ends_with('.') {
-        return Some(translate!("numfmt-error-invalid-number", "input" => s.quote()));
+        return Some(translate!("numfmt-error-invalid-number", "input" => s));
     }
 
     let valid_part = &s[..valid_prefix_len(s, unit, unit_separator)];
@@ -223,12 +223,12 @@ fn detailed_error_message(s: &str, unit: Unit, unit_separator: &str) -> Option<S
 fn parse_number_part(s: &str, input: &str) -> Result<ParsedNumber> {
     let dec_sep = locale_decimal_separator();
     if s.ends_with(dec_sep) {
-        return Err(translate!("numfmt-error-invalid-number", "input" => input.quote()));
+        return Err(translate!("numfmt-error-invalid-number", "input" => input));
     }
 
     // GNU rejects a leading '+' and scientific notation, which Rust's parsers accept.
     if s.starts_with('+') {
-        return Err(translate!("numfmt-error-invalid-number", "input" => input.quote()));
+        return Err(translate!("numfmt-error-invalid-number", "input" => input));
     }
     if s.bytes().any(|b| b == b'e' || b == b'E') {
         return Err(translate!("numfmt-error-invalid-suffix", "input" => input.quote()));
@@ -239,7 +239,7 @@ fn parse_number_part(s: &str, input: &str) -> Result<ParsedNumber> {
     }
 
     if dec_sep != "." && s.contains('.') {
-        return Err(translate!("numfmt-error-invalid-number", "input" => input.quote()));
+        return Err(translate!("numfmt-error-invalid-number", "input" => input));
     }
 
     let normalized = if dec_sep == "." {
@@ -251,7 +251,7 @@ fn parse_number_part(s: &str, input: &str) -> Result<ParsedNumber> {
     normalized
         .parse::<f64>()
         .map(ParsedNumber::Float)
-        .map_err(|_| translate!("numfmt-error-invalid-number", "input" => input.quote()))
+        .map_err(|_| translate!("numfmt-error-invalid-number", "input" => input))
 }
 
 fn parse_suffix(
@@ -280,7 +280,7 @@ fn parse_suffix(
     match (suffix, last) {
         (Some(_), _) => {}
         (None, Some(c)) if c.is_ascii_digit() && !with_i => {}
-        _ => return Err(translate!("numfmt-error-invalid-number", "input" => s.quote())),
+        _ => return Err(translate!("numfmt-error-invalid-number", "input" => s)),
     }
 
     let suffix_len = suffix.map_or(0, |(_, with_i)| 1 + usize::from(with_i));
@@ -946,7 +946,9 @@ pub fn write_formatted_with_delimiter<W: std::io::Write + ?Sized>(
         if field_selected {
             // Field must be valid UTF-8 for numeric conversion
             let field_str = std::str::from_utf8(field)
-                .map_err(|_| translate!("numfmt-error-invalid-number", "input" => escape_line(field).quote()))?
+                .map_err(
+                    |_| translate!("numfmt-error-invalid-number", "input" => escape_line(field)),
+                )?
                 .trim_start();
             let formatted = format_string(field_str, options, None)?;
             writer.write_all(formatted.as_bytes())?;
