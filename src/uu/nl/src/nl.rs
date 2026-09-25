@@ -368,7 +368,11 @@ pub fn uu_app() -> Command {
                 .long(options::STARTING_LINE_NUMBER)
                 .help(translate!("nl-help-starting-line-number"))
                 .value_name("NUMBER")
-                .value_parser(clap::value_parser!(i64)),
+                .value_parser(clap::value_parser!(i64))
+                // `-v` legitimately takes a negative NUMBER (`nl -v -2`); without this, clap
+                // treats the `-2` as a new short-option cluster instead of `-v`'s argument,
+                // reporting "invalid option -- '2'" (verified against the oracle).
+                .allow_hyphen_values(true),
         )
         .arg(
             Arg::new(options::NUMBER_WIDTH)
@@ -391,9 +395,13 @@ fn nl<T: Read>(reader: &mut BufReader<T>, stats: &mut Stats, settings: &Settings
     let mut writer = BufWriter::new(stdout());
     let mut current_numbering_style = &settings.body_numbering;
     let mut line = Vec::new();
-    // Written before every unnumbered line. Capped to avoid OOM on 32-bit targets
-    // when -w i32::MAX is passed (allocating 2 GiB would panic).
-    let blank_width = settings.number_width + 1;
+    // Written before every unnumbered line, to line it up with a numbered line's NUMBER plus
+    // its SEPARATOR -- not just NUMBER plus one byte, which only happened to match the default
+    // tab separator. A custom, longer `-s`/`--number-separator` (e.g. `-s ': '`) left the blank
+    // padding one byte short of a numbered line's real start column (verified against the
+    // oracle). Capped to avoid OOM on 32-bit targets when -w i32::MAX is passed (allocating
+    // 2 GiB would panic).
+    let blank_width = settings.number_width + settings.number_separator.as_encoded_bytes().len();
     let space_buf = vec![b' '; blank_width.min(4096)];
 
     loop {
