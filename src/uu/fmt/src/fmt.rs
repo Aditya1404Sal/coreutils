@@ -142,7 +142,15 @@ impl FmtOptions {
             }
             (Some(w), None) => {
                 let g = match w.checked_mul(DEFAULT_GOAL_TO_WIDTH_RATIO) {
-                    Some(result) => (result / 100).max(1),
+                    // GNU rounds to the nearest integer here (round-half-up), not truncating:
+                    // `fmt -w 72`'s goal is 67 (72 * 0.93 = 66.96, rounds up), not 66 -- and that
+                    // one-column difference changes which word count the Knuth-Plass cost
+                    // function picks as optimal for a line, confirmed against the oracle at
+                    // widths 71-100 (`fmt -w 72` filled one word short of GNU's own output
+                    // before this fix). `DEFAULT_GOAL` (70, for width 75 with neither -w nor -g
+                    // given) already matches this rounded value; only the dynamic case, taken
+                    // whenever -w is given at all, truncated instead.
+                    Some(result) => ((result + 50) / 100).max(1),
                     None => { Err(FmtError::InvalidWidth(w.to_string())) }?,
                 };
                 (w, g)
