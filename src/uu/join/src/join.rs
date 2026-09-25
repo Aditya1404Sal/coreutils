@@ -146,7 +146,15 @@ impl Separator for WhitespaceSep {
             }
             last_end = i + 1;
         }
-        field_ranges.push((last_end, haystack.len()));
+        // A run of trailing whitespace already consumed everything up to the end of the line:
+        // don't also emit an empty final field for it (GNU doesn't -- verified against the
+        // oracle: a trailing "a  " field before the join key on the other side joins as
+        // "... a b", not "... a  b" with a phantom empty field's separator in between). A
+        // genuinely empty line (`last_end == 0 == haystack.len()`) still gets its one empty
+        // field, unchanged.
+        if last_end < haystack.len() || last_end == 0 {
+            field_ranges.push((last_end, haystack.len()));
+        }
         field_ranges
     }
 
