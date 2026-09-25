@@ -444,7 +444,9 @@ fn parse_options(args: &ArgMatches) -> std::result::Result<NumfmtOptions, ParseE
         _ => unreachable!("Should be restricted by clap"),
     };
 
-    let suffix = args.get_one::<String>(SUFFIX).cloned();
+    let suffix = args
+        .get_one::<OsString>(SUFFIX)
+        .map(|s| s.to_string_lossy().into_owned());
 
     let unit_separator = args
         .get_one::<String>(UNIT_SEPARATOR)
@@ -700,7 +702,16 @@ pub fn uu_app() -> Command {
                 .long(SUFFIX)
                 .help(translate!("numfmt-help-suffix"))
                 .value_name("SUFFIX")
-                .allow_hyphen_values(true),
+                .allow_hyphen_values(true)
+                // GNU accepts any byte here and appends it verbatim (verified against the
+                // oracle: `--suffix=$'\xff'` isn't refused); clap's own default `String`
+                // parser refuses upfront with "invalid UTF-8 was detected in one or more
+                // arguments" instead. `--suffix` only feeds string-based prefix/suffix
+                // matching downstream (stripping it back off a `--from` value, appending it
+                // to output text), so this still loses an exact non-UTF-8 byte to lossy
+                // replacement rather than round-tripping it -- a narrower gap than an outright
+                // refusal.
+                .value_parser(ValueParser::os_string()),
         )
         .arg(
             Arg::new(UNIT_SEPARATOR)
