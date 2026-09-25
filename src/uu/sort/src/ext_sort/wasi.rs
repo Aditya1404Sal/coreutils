@@ -12,17 +12,41 @@ use std::io::Read;
 use std::iter;
 
 use itertools::Itertools;
-use uucore::error::{UError, UResult};
+use uucore::error::{UError, UResult, USimpleError};
 
 use crate::chunks::{self, Chunk};
 use crate::tmp_dir::TmpDirWrapper;
 use crate::{GlobalSettings, SortError, compare_by, open, print_sorted, sort_by};
 use crate::{Line, Output};
 
+/// The most input sort holds in memory here, where it has no external merge: 64 MiB, and 2
+/// million lines, whose bookkeeping costs more than short lines themselves.
+const MAX_INPUT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_INPUT_LINES: usize = 2_000_000;
+
+fn input_too_large() -> Box<dyn UError> {
+    USimpleError::new(
+        2,
+        "input over 64 MiB or 2000000 lines is unsupported in bash-tool",
+    )
+}
+
+/// Appends all of `reader` to `input`, failing rather than holding more than the limits allow.
+fn read_bounded(mut reader: impl Read, input: &mut Vec<u8>, separator: u8) -> UResult<()> {
+    let room = MAX_INPUT_BYTES.saturating_sub(input.len()) as u64;
+    reader.by_ref().take(room + 1).read_to_end(input)?;
+    if input.len() > MAX_INPUT_BYTES
+        || memchr::memchr_iter(separator, input).count() > MAX_INPUT_LINES
+    {
+        return Err(input_too_large());
+    }
+    Ok(())
+}
+
 /// Read one input whole and split it into lines, or `None` for an empty input.
 fn read_whole(path: &OsStr, settings: &GlobalSettings) -> UResult<Option<Chunk>> {
     let mut input = Vec::new();
-    open(path)?.read_to_end(&mut input)?;
+    read_bounded(open(path)?, &mut input, settings.line_ending.into())?;
     if input.is_empty() {
         return Ok(None);
     }
@@ -117,13 +141,11 @@ pub fn ext_sort(
     _tmp_dir: &mut TmpDirWrapper,
 ) -> UResult<()> {
     let separator = settings.line_ending.into();
-    // Read all input into memory at once. Unlike the threaded path which uses
-    // chunked buffered reads, WASI has no threads so we accept the memory cost.
-    // Note: there is no size limit here — WASI targets are expected to handle
-    // moderately sized inputs; very large files may cause OOM.
+    // Read all input into memory at once, within the limits: WASI has no threads for the
+    // chunked, merging path.
     let mut input = Vec::new();
     for file in files {
-        file?.read_to_end(&mut input)?;
+        read_bounded(file?, &mut input, separator)?;
     }
 
     if input.is_empty() {
