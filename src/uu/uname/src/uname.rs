@@ -8,6 +8,7 @@
 use std::ffi::{OsStr, OsString};
 
 use clap::{Arg, ArgAction, Command};
+#[cfg(not(target_os = "wasi"))]
 use platform_info::{PlatformInfo, PlatformInfoAPI, UNameAPI};
 use uucore::display::{print_verbatim, println_verbatim};
 use uucore::translate;
@@ -83,60 +84,117 @@ impl UNameOutput {
         out
     }
 
+    #[cfg(target_os = "wasi")]
+    fn field(opt: bool, real: &'static str) -> Option<OsString> {
+        opt.then(|| OsString::from(real))
+    }
+
     pub fn new(opts: &Options) -> UResult<Self> {
-        let uname = PlatformInfo::new()
-            .map_err(|_e| USimpleError::new(1, translate!("uname-error-cannot-get-system-name")))?;
-        let none = !(opts.all
-            || opts.all_labeled
-            || opts.kernel_name
-            || opts.nodename
-            || opts.kernel_release
-            || opts.kernel_version
-            || opts.machine
-            || opts.os
-            || opts.processor
-            || opts.hardware_platform);
+        // `platform_info` has no real WASI backend: it answers `sysname=wasi`,
+        // `nodename=localhost`, `release`/`version=0.0.0`, `osname=WASI` -- accurate to the
+        // WASI runtime underneath, but not to the simulated environment this shell already
+        // presents everywhere else (`$OSTYPE` is `linux-musl`; see `session::set_identity`).
+        // `-m`/machine is already right (`platform_info` reports the real wasm32 target), so
+        // that one field alone is left to it below; every other field is this sandbox's fixed,
+        // documented answer instead: `-s`/`-o` say Linux/GNU-Linux to match `$OSTYPE`, `-n`
+        // matches the `hostname` builtin's own answer (the worker name, falling back to
+        // `localhost`), and `-r`/`-v` are a plausible, clearly-synthetic modern kernel build
+        // string (no real kernel backs this, so any value here is a placeholder; scripts that
+        // parse `uname -r` for a version number still get one in the expected shape).
+        #[cfg(target_os = "wasi")]
+        {
+            let none = !(opts.all
+                || opts.all_labeled
+                || opts.kernel_name
+                || opts.nodename
+                || opts.kernel_release
+                || opts.kernel_version
+                || opts.machine
+                || opts.os
+                || opts.processor
+                || opts.hardware_platform);
+            let nodename =
+                std::env::var("GOLEM_WORKER_NAME").unwrap_or_else(|_| "localhost".to_owned());
+            return Ok(Self {
+                kernel_name: Self::field(
+                    opts.kernel_name || opts.all || opts.all_labeled || none,
+                    "Linux",
+                ),
+                nodename: (opts.nodename || opts.all || opts.all_labeled)
+                    .then(|| OsString::from(nodename)),
+                kernel_release: Self::field(
+                    opts.kernel_release || opts.all || opts.all_labeled,
+                    "6.1.0",
+                ),
+                kernel_version: Self::field(
+                    opts.kernel_version || opts.all || opts.all_labeled,
+                    "#1 SMP",
+                ),
+                machine: Self::field(opts.machine || opts.all || opts.all_labeled, "wasm32"),
+                os: Self::field(opts.os || opts.all || opts.all_labeled, "GNU/Linux"),
+                processor: opts.processor.then(|| translate!("uname-unknown").into()),
+                hardware_platform: opts
+                    .hardware_platform
+                    .then(|| translate!("uname-unknown").into()),
+            });
+        }
+        #[cfg(not(target_os = "wasi"))]
+        {
+            let uname = PlatformInfo::new().map_err(|_e| {
+                USimpleError::new(1, translate!("uname-error-cannot-get-system-name"))
+            })?;
+            let none = !(opts.all
+                || opts.all_labeled
+                || opts.kernel_name
+                || opts.nodename
+                || opts.kernel_release
+                || opts.kernel_version
+                || opts.machine
+                || opts.os
+                || opts.processor
+                || opts.hardware_platform);
 
-        let kernel_name = (opts.kernel_name || opts.all || opts.all_labeled || none)
-            .then(|| uname.sysname().to_owned());
+            let kernel_name = (opts.kernel_name || opts.all || opts.all_labeled || none)
+                .then(|| uname.sysname().to_owned());
 
-        let nodename =
-            (opts.nodename || opts.all || opts.all_labeled).then(|| uname.nodename().to_owned());
+            let nodename = (opts.nodename || opts.all || opts.all_labeled)
+                .then(|| uname.nodename().to_owned());
 
-        let kernel_release = (opts.kernel_release || opts.all || opts.all_labeled)
-            .then(|| uname.release().to_owned());
+            let kernel_release = (opts.kernel_release || opts.all || opts.all_labeled)
+                .then(|| uname.release().to_owned());
 
-        let kernel_version = (opts.kernel_version || opts.all || opts.all_labeled)
-            .then(|| uname.version().to_owned());
+            let kernel_version = (opts.kernel_version || opts.all || opts.all_labeled)
+                .then(|| uname.version().to_owned());
 
-        let machine =
-            (opts.machine || opts.all || opts.all_labeled).then(|| uname.machine().to_owned());
+            let machine =
+                (opts.machine || opts.all || opts.all_labeled).then(|| uname.machine().to_owned());
 
-        let os = (opts.os || opts.all || opts.all_labeled).then(|| uname.osname().to_owned());
+            let os = (opts.os || opts.all || opts.all_labeled).then(|| uname.osname().to_owned());
 
-        // This option is unsupported on modern Linux systems
-        // See: https://lists.gnu.org/archive/html/bug-coreutils/2005-09/msg00063.html
-        //
-        // -a and -A omit an unknown processor or hardware platform, and since we never
-        // determine either one, they only ever show up when explicitly requested.
-        let processor = opts.processor.then(|| translate!("uname-unknown").into());
+            // This option is unsupported on modern Linux systems
+            // See: https://lists.gnu.org/archive/html/bug-coreutils/2005-09/msg00063.html
+            //
+            // -a and -A omit an unknown processor or hardware platform, and since we never
+            // determine either one, they only ever show up when explicitly requested.
+            let processor = opts.processor.then(|| translate!("uname-unknown").into());
 
-        // This option is unsupported on modern Linux systems
-        // See: https://lists.gnu.org/archive/html/bug-coreutils/2005-09/msg00063.html
-        let hardware_platform = opts
-            .hardware_platform
-            .then(|| translate!("uname-unknown").into());
+            // This option is unsupported on modern Linux systems
+            // See: https://lists.gnu.org/archive/html/bug-coreutils/2005-09/msg00063.html
+            let hardware_platform = opts
+                .hardware_platform
+                .then(|| translate!("uname-unknown").into());
 
-        Ok(Self {
-            kernel_name,
-            nodename,
-            kernel_release,
-            kernel_version,
-            machine,
-            os,
-            processor,
-            hardware_platform,
-        })
+            Ok(Self {
+                kernel_name,
+                nodename,
+                kernel_release,
+                kernel_version,
+                machine,
+                os,
+                processor,
+                hardware_platform,
+            })
+        }
     }
 }
 
