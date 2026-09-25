@@ -156,10 +156,22 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     let diag_args = uucore::diagnostics::capture(&args);
     let matches = uucore::clap_localization::handle_clap_result(uu_app(), args)?;
 
+    if !matches.contains_id(options::SIZE) && !matches.contains_id(options::REFERENCE) {
+        return Err(USimpleError::new(
+            1,
+            translate!("truncate-error-must-specify-size-or-reference"),
+        ));
+    }
+
     let files: Vec<OsString> = matches
         .get_many::<OsString>(options::ARG_FILES)
         .map(|v| v.cloned().collect())
-        .expect("ARG_FILES should be required by clap");
+        .unwrap_or_default();
+    if files.is_empty() {
+        let formatter = uucore::clap_localization::ErrorFormatter::new(uucore::util_name());
+        let code = formatter.print_missing_destination_operand(None, 1);
+        return Err(USimpleError::new(code, ""));
+    }
 
     let io_blocks = matches.get_flag(options::IO_BLOCKS);
     let no_create = matches.get_flag(options::NO_CREATE);
@@ -204,10 +216,14 @@ pub fn uu_app() -> Command {
                 .action(ArgAction::SetTrue),
         )
         .arg(
+            // Not `.required_unless_present(SIZE)`: GNU's wording for neither being given
+            // ("you must specify either '--size' or '--reference'") is its own message, not
+            // clap's generic missing-argument one -- checked manually in `uumain`, GNU-style
+            // and before the FILES check (confirmed against the oracle: `truncate` alone,
+            // with no operands at all, gives this message, not a missing-FILE one).
             Arg::new(options::REFERENCE)
                 .short('r')
                 .long(options::REFERENCE)
-                .required_unless_present(options::SIZE)
                 .help(translate!("truncate-help-reference"))
                 .value_name("RFILE")
                 .value_hint(clap::ValueHint::FilePath)
@@ -217,16 +233,18 @@ pub fn uu_app() -> Command {
             Arg::new(options::SIZE)
                 .short('s')
                 .long(options::SIZE)
-                .required_unless_present(options::REFERENCE)
                 .help(translate!("truncate-help-size"))
                 .allow_hyphen_values(true)
                 .value_name("SIZE"),
         )
         .arg(
+            // Not `.required(true)`: GNU checks SIZE/REFERENCE first, so `truncate` alone
+            // (neither those nor a FILE) gives the size-or-reference message above, not a
+            // missing-FILE one -- confirmed against the oracle. Checked manually in
+            // `uumain`, after that.
             Arg::new(options::ARG_FILES)
                 .value_name("FILE")
                 .action(ArgAction::Append)
-                .required(true)
                 .value_hint(clap::ValueHint::FilePath)
                 .value_parser(clap::value_parser!(OsString)),
         )

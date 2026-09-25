@@ -27,7 +27,10 @@ truncate-help-size = set or adjust the size of each file according to SIZE, whic
 truncate-error-cannot-open-no-device = cannot open { $filename } for writing: No such device or address
 truncate-error-cannot-open-for-writing = cannot open { $filename } for writing
 truncate-error-invalid-number = Invalid number: { $error }
-truncate-error-must-specify-relative-size = you must specify a relative '--size' with '--reference'
+truncate-error-must-specify-relative-size = you must specify a relative ‘--size’ with ‘--reference’
+    Try 'truncate --help' for more information.
+truncate-error-must-specify-size-or-reference = you must specify either ‘--size’ or ‘--reference’
+    Try 'truncate --help' for more information.
 truncate-error-division-by-zero = division by zero
 truncate-error-cannot-stat-no-such-file = cannot stat { $filename }: No such file or directory
 truncate-error-value-too-large = Value too large for defined data type

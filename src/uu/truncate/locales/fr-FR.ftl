@@ -28,6 +28,9 @@ truncate-error-cannot-open-no-device = impossible d'ouvrir { $filename } en écr
 truncate-error-cannot-open-for-writing = impossible d'ouvrir { $filename } en écriture
 truncate-error-invalid-number = Nombre invalide : { $error }
 truncate-error-must-specify-relative-size = vous devez spécifier une '--size' relative avec '--reference'
+    Essayez « truncate --help » pour plus d'informations.
+truncate-error-must-specify-size-or-reference = vous devez spécifier soit '--size' soit '--reference'
+    Essayez « truncate --help » pour plus d'informations.
 truncate-error-division-by-zero = division par zéro
 truncate-error-cannot-stat-no-such-file = impossible d'obtenir les informations de { $filename } : Aucun fichier ou répertoire de ce type
 truncate-error-value-too-large = Valeur trop grande pour le type de données défini
