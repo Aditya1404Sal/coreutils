@@ -996,6 +996,18 @@ pub fn write_formatted_with_whitespace<W: std::io::Write + ?Sized>(
 
             let formatted = format_string(field, options, implicit_padding)?;
             writer.write_all(formatted.as_bytes())?;
+        } else if n > 1 {
+            // Same normalization as the selected-field branch above: GNU replaces only the
+            // *first* character of the separator with a canonical space and keeps any further
+            // whitespace in the run verbatim -- so a lone tab becomes one space (verified:
+            // `numfmt --format '%-5f'` on tab-separated `2048\ta` prints `2.0K  a`, one space
+            // from the %-5f padding plus the normalized tab), while a run of several spaces
+            // stays exactly as wide as it was (verified: `2048   a   b` through plain `numfmt`
+            // prints `2.0K   a   b`, the two 3-space gaps untouched).
+            writer.write_all(b" ")?;
+            let prefix = &prefix[prefix.chars().next().map_or(0, char::len_utf8)..];
+            writer.write_all(prefix.as_bytes())?;
+            writer.write_all(field.as_bytes())?;
         } else {
             // the -z option converts an initial \n into a space
             let prefix = if options.zero_terminated && prefix.starts_with('\n') {
@@ -1004,7 +1016,8 @@ pub fn write_formatted_with_whitespace<W: std::io::Write + ?Sized>(
             } else {
                 prefix
             };
-            // add unselected field without conversion
+            // Leading whitespace before the very first field is preserved verbatim (it isn't a
+            // field separator).
             writer.write_all(prefix.as_bytes())?;
             writer.write_all(field.as_bytes())?;
         }
