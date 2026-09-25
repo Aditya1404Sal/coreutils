@@ -71,7 +71,7 @@ enum MkTempError {
     #[error("{}", translate!("mktemp-error-too-many-templates"))]
     TooManyTemplates,
 
-    #[error("{}", translate!("mktemp-error-not-found", "template_type" => .0, "template" => .1.quote()))]
+    #[error("{}", translate!("mktemp-error-not-found", "template_type" => .0, "template" => uucore::display::gnu_quote(.1.display())))]
     NotFound(String, PathBuf),
 }
 
