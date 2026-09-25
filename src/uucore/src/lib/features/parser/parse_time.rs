@@ -10,7 +10,6 @@
 //! Use the [`from_str`] function to parse a [`Duration`] from a string.
 
 use crate::{
-    display::Quotable,
     extendedbigdecimal::ExtendedBigDecimal,
     parser::num_parser::{self, ExtendedParserError, ParseTarget},
 };
@@ -63,7 +62,7 @@ pub fn from_str(string: &str, allow_suffixes: bool) -> Result<Duration, String> 
 
     let len = string.len();
     if len == 0 {
-        return Err(format!("invalid time interval {}", string.quote()));
+        return Err(format!("invalid time interval {}", crate::display::gnu_quote(string)));
     }
     let num = match num_parser::parse(
         string,
@@ -77,7 +76,7 @@ pub fn from_str(string: &str, allow_suffixes: bool) -> Result<Duration, String> 
         Ok(ebd) | Err(ExtendedParserError::Overflow(ebd)) => ebd,
         Err(ExtendedParserError::Underflow(_)) => return Ok(NANOSECOND_DURATION),
         _ => {
-            return Err(format!("invalid time interval {}", string.quote()));
+            return Err(format!("invalid time interval {}", crate::display::gnu_quote(string)));
         }
     };
 
@@ -97,7 +96,7 @@ pub fn from_str(string: &str, allow_suffixes: bool) -> Result<Duration, String> 
         }
         ExtendedBigDecimal::MinusZero => 0.into(),
         ExtendedBigDecimal::Infinity => return Ok(Duration::MAX),
-        _ => return Err(format!("invalid time interval {}", string.quote())),
+        _ => return Err(format!("invalid time interval {}", crate::display::gnu_quote(string))),
     };
 
     // Transform to nanoseconds (9 digits after decimal point)
