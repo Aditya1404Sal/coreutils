@@ -738,12 +738,20 @@ impl EnvAppData {
                     clap::error::ErrorKind::DisplayHelp
                     | clap::error::ErrorKind::DisplayVersion => return Err(e.into()),
                     _ => {
-                        // Report, add the shebang hint, and return rather than exit: an embedding
-                        // host runs uumain in-process.
+                        // Report, and return rather than exit: an embedding host runs uumain
+                        // in-process. GNU's shebang hint is for the specific case of a
+                        // shebang line splitting its arguments unexpectedly (e.g. an
+                        // unrecognized combined flag); a plain unknown option is not that, and
+                        // GNU does not add the hint there.
                         let formatter = uucore::clap_localization::ErrorFormatter::new("env");
                         let code = formatter.print_error(&e, 125);
-                        let _ =
-                            writeln!(stderr(), "env: {}", translate!("env-error-use-s-shebang"));
+                        if e.kind() != clap::error::ErrorKind::UnknownArgument {
+                            let _ = writeln!(
+                                stderr(),
+                                "env: {}",
+                                translate!("env-error-use-s-shebang")
+                            );
+                        }
                         return Err(uucore::error::USimpleError::new(code, ""));
                     }
                 }
