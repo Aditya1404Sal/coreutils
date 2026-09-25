@@ -647,6 +647,31 @@ fn map_clap_errors(clap_error: Error) -> Box<dyn UError> {
         {
             override_all_repeated_badoption
         }
+        // `UniqStream::from_args` (the bash-tool streaming entry point; see its call site)
+        // reaches this unconditionally, unlike `uumain`'s own `Err` arm below, which only
+        // reaches it when `exit_code() != 0` and otherwise uses `ErrorFormatter` for GNU
+        // wording -- so an unrecognized option here previously fell through to clap's own
+        // raw usage block instead of GNU's "unrecognized option '--x'"/"invalid option --
+        // 'x'". `handle_unknown_argument`'s equivalent logic is `pub(crate)` inside
+        // `uucore::clap_localization`, not reusable from here, so this mirrors it directly.
+        ErrorKind::UnknownArgument => {
+            let arg = clap_error
+                .get(ContextKind::InvalidArg)
+                .map(|v| v.to_string());
+            match arg {
+                Some(arg) if arg.starts_with("--") => {
+                    format!("unrecognized option '{arg}'\n{footer}")
+                }
+                Some(arg) => {
+                    let letter = arg.strip_prefix('-').and_then(|rest| rest.chars().next());
+                    match letter {
+                        Some(letter) => format!("invalid option -- '{letter}'\n{footer}"),
+                        None => return clap_error.into(),
+                    }
+                }
+                None => return clap_error.into(),
+            }
+        }
         _ => return clap_error.into(),
     };
     USimpleError::new(1, error_message)
