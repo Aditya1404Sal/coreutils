@@ -22,7 +22,7 @@ use std::io::{BufRead, BufWriter, IsTerminal, Write, stderr};
 use std::str::FromStr;
 
 use uucore::display::Quotable;
-use uucore::error::{FromIo, UResult};
+use uucore::error::{FromIo, UResult, USimpleError};
 use uucore::i18n::decimal::locale_grouping_separator;
 use uucore::parser::parse_size::{IEC_BASES, SI_BASES};
 use uucore::parser::shortcut_value_parser::ShortcutValueParser;
@@ -36,6 +36,10 @@ pub mod options;
 mod diagnostics;
 mod numeric;
 mod units;
+
+/// Cap for `--padding`: past this, formatting a single number would try to allocate that many
+/// bytes of padding. Matches the shell's other shared in-memory limits.
+const MAX_PADDING: usize = 16 * 1024 * 1024;
 
 // Returns `true` if the input is in scientific notation
 fn is_scientific(input: &[u8]) -> bool {
@@ -367,6 +371,15 @@ fn parse_options(args: &ArgMatches) -> std::result::Result<NumfmtOptions, ParseE
             }),
         None => Ok(0),
     }?;
+    // `--padding` becomes a `String::with_capacity`/pad-out call sized directly off this number;
+    // GNU itself will happily try to allocate gigabytes for an adversarial value, which is not
+    // safe to reproduce unbounded in this sandbox. Refuse loudly past the shell's shared
+    // in-memory limit instead.
+    if padding.unsigned_abs() > MAX_PADDING {
+        return Err(ParseError::Unsupported(format!(
+            "--padding above {MAX_PADDING} is unsupported in bash-tool"
+        )));
+    }
 
     let header = if args.value_source(HEADER) == Some(ValueSource::CommandLine) {
         let value = args.get_one::<String>(HEADER).unwrap();
@@ -533,6 +546,9 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         }
         Err(ParseError::Other(message)) => {
             return Err(NumfmtError::IllegalArgument(message).into());
+        }
+        Err(ParseError::Unsupported(message)) => {
+            return Err(USimpleError::new(2, message));
         }
     };
 

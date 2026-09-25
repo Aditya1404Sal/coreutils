@@ -180,6 +180,9 @@ pub enum ParseError {
     /// An option value that is wrong from end to end.
     Value(Box<OptionValueError>),
     Other(String),
+    /// A value bash-tool refuses outright rather than risk an unbounded allocation for
+    /// (status 2, distinct from the other variants' status 1).
+    Unsupported(String),
 }
 
 impl From<OptionValueError> for ParseError {
