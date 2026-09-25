@@ -184,8 +184,8 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         // directly instead of manufacturing a clap error only to reformat its own message
         // right back out.
         let formatter = uucore::clap_localization::ErrorFormatter::new(uucore::util_name());
-        let code = formatter
-            .print_missing_destination_operand(Some(&files[0].to_string_lossy()), 1);
+        let code =
+            formatter.print_missing_destination_operand(Some(&files[0].to_string_lossy()), 1);
         return Err(USimpleError::new(code, ""));
     }
 
@@ -459,7 +459,11 @@ fn handle_two_paths(source: &Path, target: &Path, opts: &Options) -> UResult<()>
                     e.map_err_context(|| message)
                 })
             } else {
-                Err(MvError::DirectoryToNonDirectory(target.quote().to_string()).into())
+                Err(MvError::DirectoryToNonDirectory(
+                    target.quote().to_string(),
+                    source.quote().to_string(),
+                )
+                .into())
             }
         } else {
             move_files_into_dir(&[source.to_path_buf()], target, opts)
@@ -497,7 +501,21 @@ fn handle_two_paths(source: &Path, target: &Path, opts: &Options) -> UResult<()>
             hardlink_params.0,
             hardlink_params.1,
         )
-        .map_err(|e| USimpleError::new(1, format!("{e}")))
+        .map_err(|e| -> Box<dyn UError> {
+            let message = if is_directory_not_empty_error(&e) {
+                translate!(
+                    "mv-error-cannot-overwrite-non-empty-directory",
+                    "target" => target.quote()
+                )
+            } else {
+                translate!(
+                    "mv-error-cannot-move",
+                    "source" => source.quote(),
+                    "target" => target.quote()
+                )
+            };
+            e.map_err_context(|| message)
+        })
     }
 }
 
