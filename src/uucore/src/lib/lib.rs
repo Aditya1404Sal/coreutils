@@ -587,16 +587,19 @@ pub fn os_string_from_vec(vec: Vec<u8>) -> error::UResult<OsString> {
 
 /// Converts an `OsString` into a `Vec<u8>`, parsing as UTF-8 on non-unix platforms.
 ///
-/// This always succeeds on unix platforms,
-/// and fails on other platforms if the bytes can't be parsed as UTF-8.
-#[cfg_attr(
-    any(unix, all(target_os = "wasi", target_env = "p1")),
-    expect(clippy::unnecessary_wraps)
-)]
+/// This always succeeds on unix platforms and WASI (both preview 1, where `OsStringExt::into_vec`
+/// is stable, and preview 2 -- `std::os::wasi::ffi` is unstable there, but `OsStr`'s encoding is
+/// the same raw bytes, so the portable, stable `into_encoded_bytes` gives the identical result;
+/// this used to fall through to the UTF-8-only branch below for wasip2 specifically, refusing
+/// with "invalid UTF-8 was detected in one or more arguments" for an argument GNU accepts, e.g.
+/// `expr "a$(printf '\xff')" : 'a.'`, confirmed against the oracle). On platforms whose `OsStr`
+/// encoding genuinely isn't raw bytes (Windows' WTF-8), this can still fail on an unpaired
+/// surrogate.
+#[cfg_attr(any(unix, target_os = "wasi"), expect(clippy::unnecessary_wraps))]
 pub fn os_string_to_vec(s: OsString) -> error::UResult<Vec<u8>> {
-    #[cfg(any(unix, all(target_os = "wasi", target_env = "p1")))]
-    let v = s.into_vec();
-    #[cfg(not(any(unix, all(target_os = "wasi", target_env = "p1"))))]
+    #[cfg(any(unix, target_os = "wasi"))]
+    let v = s.into_encoded_bytes();
+    #[cfg(not(any(unix, target_os = "wasi")))]
     let v = s
         .into_string()
         .map_err(|_| {
