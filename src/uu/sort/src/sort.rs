@@ -2783,6 +2783,11 @@ fn exec(
     } else {
         // Open each input once, when it is reached, so that only one input is open
         // at a time and FIFOs are never reopened.
+        #[cfg(target_os = "wasi")]
+        let mut lines = files
+            .iter()
+            .map(|path| open(path).map(|reader| ext_sort::named_reader(path, reader)));
+        #[cfg(not(target_os = "wasi"))]
         let mut lines = files.iter().map(open);
         ext_sort(&mut lines, settings, output, tmp_dir)
     }

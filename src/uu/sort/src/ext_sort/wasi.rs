@@ -31,10 +31,50 @@ fn input_too_large() -> Box<dyn UError> {
     )
 }
 
+/// A read error naming the input it came from.
+#[derive(Debug)]
+struct ReadFailed(std::path::PathBuf, std::io::Error);
+
+impl std::fmt::Display for ReadFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use uucore::display::Quotable;
+        write!(
+            f,
+            "read failed: {}: {}",
+            self.0.maybe_quote(),
+            uucore::error::strip_errno(&self.1)
+        )
+    }
+}
+
+impl std::error::Error for ReadFailed {}
+
+/// `reader`, whose read errors name `path` as GNU sort reports them (`read failed: PATH: …`).
+pub fn named_reader(path: &OsStr, reader: Box<dyn Read + Send>) -> Box<dyn Read + Send> {
+    struct Named(std::path::PathBuf, Box<dyn Read + Send>);
+    impl Read for Named {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.1
+                .read(buf)
+                .map_err(|error| std::io::Error::other(ReadFailed(self.0.clone(), error)))
+        }
+    }
+    Box::new(Named(std::path::PathBuf::from(path), reader))
+}
+
 /// Appends all of `reader` to `input`, failing rather than holding more than the limits allow.
 fn read_bounded(mut reader: impl Read, input: &mut Vec<u8>, separator: u8) -> UResult<()> {
     let room = MAX_INPUT_BYTES.saturating_sub(input.len()) as u64;
-    reader.by_ref().take(room + 1).read_to_end(input)?;
+    if let Err(error) = reader.by_ref().take(room + 1).read_to_end(input) {
+        // A read error that names its input is reported as GNU sort words it.
+        if error
+            .get_ref()
+            .is_some_and(<dyn std::error::Error + Send + Sync>::is::<ReadFailed>)
+        {
+            return Err(USimpleError::new(2, error.to_string()));
+        }
+        return Err(error.into());
+    }
     if input.len() > MAX_INPUT_BYTES
         || memchr::memchr_iter(separator, input).count() > MAX_INPUT_LINES
     {
