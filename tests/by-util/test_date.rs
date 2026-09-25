@@ -573,7 +573,10 @@ fn test_date_set_hyphen_prefixed_values() {
         for date_str in test_cases {
             let result = new_ucmd!().arg("--set").arg(date_str).fails();
             // As GNU does, the date is printed even though setting it failed.
-            assert!(!result.stdout_str().is_empty(), "no date printed for '{date_str}'");
+            assert!(
+                !result.stdout_str().is_empty(),
+                "no date printed for '{date_str}'"
+            );
             // permission error, not argument parsing error
             assert!(
                 result.stderr_str().starts_with("date: cannot set date: "),
