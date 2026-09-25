@@ -598,7 +598,10 @@ fn calculate_columns(lengths: &[usize], width: usize, by_columns: bool) -> Colum
         }
         let row_width =
             widths.iter().sum::<usize>() + DEFAULT_SEPARATOR_SIZE * widths.len().saturating_sub(1);
-        if columns == 1 || row_width <= width {
+        // GNU's own `init_column_info` keeps a column count only while its row is *strictly*
+        // narrower than the display (`line_len < line_length`); a row that lands exactly on
+        // the edge is one column too many, not a perfect fit.
+        if columns == 1 || row_width < width {
             return ColumnPlan {
                 columns,
                 rows,
@@ -613,13 +616,34 @@ fn calculate_columns(lengths: &[usize], width: usize, by_columns: bool) -> Colum
     }
 }
 
+/// Write `pad` columns of fill after a cursor at absolute column `cur`, using real tab bytes
+/// for any run that reaches a tab stop (a multiple of `tab_size`) without passing the target
+/// column -- GNU's own column filler, which opportunistically shortens output this way
+/// whenever `tab_size` is nonzero (the default; `0` means "never", as `-T0`/color mode ask).
+fn write_fill(out: &mut BufWriter<Stdout>, cur: usize, pad: usize, tab_size: usize) -> UResult<()> {
+    let target = cur + pad;
+    let mut cur = cur;
+    while let Some(quot) = cur.checked_div(tab_size) {
+        let next_stop = (quot + 1) * tab_size;
+        if next_stop > target {
+            break;
+        }
+        write!(out, "\t")?;
+        cur = next_stop;
+    }
+    if cur < target {
+        write!(out, "{:pad$}", "", pad = target - cur)?;
+    }
+    Ok(())
+}
+
 fn display_grid(
     names: impl Iterator<Item = DisplayWithQuote>,
     width: u16,
     direction: Direction,
     out: &mut BufWriter<Stdout>,
     quoted: bool,
-    _tab_size: usize,
+    tab_size: usize,
 ) -> UResult<()> {
     if width == 0 {
         // If the width is 0 we print one single line
@@ -683,6 +707,11 @@ fn display_grid(
             let Some(last_col) = last_in_row else {
                 continue;
             };
+            // `cur_col`: the absolute output column the cursor is at, tracked across the
+            // whole row -- tab stops (used by `write_fill`) are measured from column 0, not
+            // from each slot's own start, so this has to be a running total.
+            let mut cur_col = 0usize;
+            let mut slot_start = 0usize;
             for col in 0..=last_col {
                 let idx = if by_columns {
                     col * plan.rows + row
@@ -692,12 +721,13 @@ fn display_grid(
                 let Some(name) = names.get(idx) else {
                     continue;
                 };
-                if col == last_col {
-                    write!(out, "{name}")?;
-                } else {
-                    let pad = (plan.widths[col] + DEFAULT_SEPARATOR_SIZE)
-                        .saturating_sub(ansi_width(name));
-                    write!(out, "{name}{:pad$}", "")?;
+                write!(out, "{name}")?;
+                cur_col += ansi_width(name);
+                if col != last_col {
+                    let slot_end = slot_start + plan.widths[col] + DEFAULT_SEPARATOR_SIZE;
+                    write_fill(out, cur_col, slot_end - cur_col, tab_size)?;
+                    cur_col = slot_end;
+                    slot_start = slot_end;
                 }
             }
             writeln!(out)?;

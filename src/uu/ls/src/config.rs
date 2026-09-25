@@ -15,6 +15,7 @@ use std::{
 
 use glob::Pattern;
 use lscolors::LsColors;
+use term_grid::SPACES_IN_TAB;
 
 use uucore::{
     diagnostics::OptionValue, display::Quotable, error::UResult, format::human::SizeFormat,
@@ -1074,10 +1075,7 @@ impl Config {
             line_ending: LineEnding::from_zero_flag(options.get_flag(options::ZERO)),
             dired,
             hyperlink,
-            // GNU only pads to tab stops here when `-T`/`--tabsize` is given explicitly (or
-            // needs_color's Some(0) case, which already means "no tabs"); with neither, real
-            // `ls -C`/`-x` fills with plain spaces, never raw tab bytes.
-            tab_size: tab_size.unwrap_or(0),
+            tab_size: tab_size.unwrap_or(SPACES_IN_TAB),
         })
     }
 }
