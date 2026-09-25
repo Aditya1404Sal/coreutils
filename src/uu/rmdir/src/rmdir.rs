@@ -117,10 +117,25 @@ fn remove_single(path: &Path, opts: Opts) -> Result<(), Error<'_>> {
             translate!("rmdir-verbose-removing-directory", "util_name" => "rmdir", "path" => path.quote())
         );
     }
-    remove_dir(path).map_err(|error| Error { error, path })
+    // POSIX rmdir(2) accepts a trailing slash on an ordinary directory (GNU's own `rmdir foo/`
+    // just succeeds); WASI's implementation doesn't, and fails the whole call with EINVAL
+    // instead -- confirmed against the oracle. The symlink-specific handling above (`unix`
+    // only) already strips it for its own detection; this does the same for the actual removal
+    // call, on every platform, since it's always safe to try without a trailing slash.
+    let stripped = {
+        let bytes = path.as_os_str().as_encoded_bytes();
+        let trimmed = strip_trailing_slashes_from_path(bytes);
+        (trimmed.len() != bytes.len()).then(|| {
+            // SAFETY: `trimmed` is a prefix of `bytes`, itself a valid encoding (from
+            // `path.as_os_str()`), that ends only at ASCII '/' boundaries -- never inside a
+            // multi-byte sequence in any encoding this crate targets.
+            let os_str = unsafe { std::ffi::OsStr::from_encoded_bytes_unchecked(trimmed) };
+            Path::new(os_str)
+        })
+    };
+    remove_dir(stripped.unwrap_or(path)).map_err(|error| Error { error, path })
 }
 
-#[cfg(unix)]
 fn strip_trailing_slashes_from_path(path: &[u8]) -> &[u8] {
     let mut end = path.len();
     while end > 0 && path[end - 1] == b'/' {
