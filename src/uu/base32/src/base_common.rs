@@ -105,7 +105,6 @@ pub fn base_app(about: String, usage: String) -> Command {
         .arg(
             Arg::new(options::DECODE)
                 .short('d')
-                .visible_short_alias('D')
                 .long(options::DECODE)
                 .help(translate!("base-common-help-decode"))
                 .action(ArgAction::SetTrue)
@@ -721,7 +720,10 @@ pub mod fast_decode {
         let supports_partial_decode = supports_fast_decode_and_encode.supports_partial_decode();
 
         for &byte in &input {
-            if byte == b'\n' || byte == b'\r' {
+            // GNU tolerates the newlines its own wrapped output uses, but not a bare `\r`
+            // (as a CRLF-terminated input would have): that's invalid input like any other
+            // non-alphabet byte, unless `-i`/`--ignore-garbage` says otherwise below.
+            if byte == b'\n' {
                 continue;
             }
 
@@ -730,7 +732,7 @@ pub mod fast_decode {
             } else if ignore_garbage {
                 continue;
             } else {
-                return Err(USimpleError::new(1, "error: invalid input"));
+                return Err(USimpleError::new(1, "invalid input"));
             }
 
             if supports_partial_decode {
@@ -779,7 +781,7 @@ pub mod fast_decode {
             write_to_output(&mut decoded_buffer, output)?;
 
             if had_invalid_tail {
-                return Err(USimpleError::new(1, "error: invalid input"));
+                return Err(USimpleError::new(1, "invalid input"));
             }
         }
 
@@ -813,7 +815,9 @@ pub mod fast_decode {
             && let read_len @ 1.. = read_buffer.len()
         {
             for &byte in read_buffer {
-                if byte == b'\n' || byte == b'\r' {
+                // See the matching comment in `fast_decode_buffer`: a bare `\r` is invalid
+                // input, not something to tolerate alongside `\n`.
+                if byte == b'\n' {
                     continue;
                 }
 
@@ -842,7 +846,7 @@ pub mod fast_decode {
                             buffer.drain(..decode_in_chunks_of_size);
                         }
                     }
-                    return Err(USimpleError::new(1, "error: invalid input"));
+                    return Err(USimpleError::new(1, "invalid input"));
                 }
 
                 if supports_partial_decode {
@@ -894,7 +898,7 @@ pub mod fast_decode {
             write_to_output(&mut decoded_buffer, output)?;
 
             if had_invalid_tail {
-                return Err(USimpleError::new(1, "error: invalid input"));
+                return Err(USimpleError::new(1, "invalid input"));
             }
         }
 
