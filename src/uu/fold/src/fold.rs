@@ -259,14 +259,19 @@ fn fold_file_bytewise<T: Read, W: Write>(
         }
 
         // No newline: with -s, break after the last whitespace (excluding CR);
-        // otherwise hard-wrap at `width`.
+        // otherwise hard-wrap at `width`. `-b` counts bytes toward the width budget (unlike
+        // the default column-counting fold), but GNU still never splits a multi-byte UTF-8
+        // character in two -- verified against the oracle: three 2-byte 'é' characters with
+        // `-w 3` fold one character per line (2 bytes each), not a 3-byte chunk straddling a
+        // character. `width` alone can land inside such a sequence; back it up to the
+        // character's own start.
         let end = if spaces {
             chunk
                 .iter()
                 .rposition(|c| c.is_ascii_whitespace() && *c != CR)
                 .map_or(width, |i| i + 1)
         } else {
-            width
+            last_utf8_boundary_at_or_before(&line, width)
         };
 
         // Width/space-driven fold: `end <= width` and the check above ruled out
@@ -276,6 +281,24 @@ fn fold_file_bytewise<T: Read, W: Write>(
         line.drain(..end);
     }
     Ok(())
+}
+
+/// The largest index `<= width` that isn't in the middle of a UTF-8 character -- i.e. `line[i]`
+/// is not a continuation byte (`0x80..=0xBF`). A UTF-8 character is at most 4 bytes, so at most
+/// 3 steps back ever finds one; if `width` itself is smaller than the character starting before
+/// it (an extreme `-w` too small even for one character) or the input isn't valid UTF-8 at this
+/// point, fall back to `width` unchanged (raw truncation, as for any other binary data).
+fn last_utf8_boundary_at_or_before(line: &[u8], width: usize) -> usize {
+    for back in 0..4 {
+        let Some(end) = width.checked_sub(back) else {
+            break;
+        };
+        match line.get(end) {
+            Some(byte) if (0x80..=0xBF).contains(byte) => continue,
+            _ => return end,
+        }
+    }
+    width
 }
 
 fn next_tab_stop(col_count: usize) -> usize {
