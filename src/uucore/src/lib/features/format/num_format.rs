@@ -9,7 +9,9 @@
 
 use bigdecimal::BigDecimal;
 use bigdecimal::num_bigint::ToBigInt;
+use num_traits::FromPrimitive;
 use num_traits::Signed;
+use num_traits::ToPrimitive;
 use num_traits::Zero;
 use std::cmp::min;
 use std::io::Write;
@@ -298,6 +300,30 @@ impl Formatter<&ExtendedBigDecimal> for Float {
         }
 
         let s = if let ExtendedBigDecimal::BigDecimal(bd) = abs {
+            // GNU's printf (and the C library under it) converts its numeric argument
+            // through an actual `double` before %f/%e/%g format it -- so `printf '%.2f'
+            // 2.675` prints "2.67" (the nearest double to 2.675 is a hair under it), not
+            // the exact decimal's "2.68" (confirmed against the oracle, including that
+            // %f's rounding decision genuinely varies with the argument's magnitude in a
+            // way only binary floating-point rounding explains, not a fixed decimal rule
+            // like round-half-to-even). `ExtendedBigDecimal` deliberately keeps exact
+            // decimal precision through parsing and arithmetic elsewhere (seq, numfmt,
+            // big integers, ...) -- neither of which reaches this `Float` formatter, the
+            // one place %-conversions on a float go through -- so giving that precision
+            // up here, right before formatting, only affects printf's own %f/%e/%g/%a.
+            //
+            // %f has its own further special case: a value with no fractional part,
+            // however many digits (`is_integer` looks past any that are exactly zero),
+            // prints every digit exactly rather than rounding through a double -- GNU
+            // does this too, confirmed against the oracle up to 30-digit integers, most
+            // likely because there is never a genuine fractional-digit rounding decision
+            // to make for an integer. %e/%g's requested significant-digit count can cut
+            // into the integer part itself, so this does not apply to them.
+            let bd = if matches!(self.variant, FloatVariant::Decimal) && bd.is_integer() {
+                bd
+            } else {
+                round_trip_through_f64(bd)
+            };
             match self.variant {
                 FloatVariant::Decimal => {
                     format_float_decimal(&bd, self.precision, self.force_decimal)
@@ -396,6 +422,18 @@ fn get_sign_indicator(sign: PositiveSign, negative: bool) -> String {
             PositiveSign::Plus => String::from("+"),
             PositiveSign::Space => String::from(" "),
         }
+    }
+}
+
+/// Give up `bd`'s exact decimal precision for the nearest `f64`'s, converted back to an
+/// (inexact) `BigDecimal` -- see the comment at this function's one call site for why.
+/// Falls back to `bd` itself on the (extreme, already guarded against earlier by the
+/// scale-overflow check above this function's caller) chance that it is out of `f64`'s
+/// range entirely, rather than silently turning a finite value into infinity or zero.
+fn round_trip_through_f64(bd: BigDecimal) -> BigDecimal {
+    match bd.to_f64() {
+        Some(f) if f.is_finite() => BigDecimal::from_f64(f).unwrap_or(bd),
+        _ => bd,
     }
 }
 

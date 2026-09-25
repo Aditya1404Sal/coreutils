@@ -53,7 +53,7 @@ pub use os_display::{Quotable, Quoted};
 /// had a locale at all and so use `Quotable::quote`, which is a real, if cosmetic, difference
 /// from GNU in every one of them; this exists for new/touched call sites to match GNU exactly
 /// instead of adding another one.
-pub fn gnu_quote(text: impl std::fmt::Display) -> String {
+pub fn gnu_quote(text: impl fmt::Display) -> String {
     format!("\u{2018}{text}\u{2019}")
 }
 
