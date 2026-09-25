@@ -12,7 +12,7 @@ use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, DirEntry, File, Metadata};
 use std::io::{self, BufRead, BufReader, Write, stdout};
-#[cfg(not(windows))]
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 #[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt;
@@ -214,9 +214,20 @@ impl Stat {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
 fn get_blocks(_path: &Path, metadata: &Metadata) -> u64 {
     metadata.blocks()
+}
+
+// WASI has no `st_blocks` -- the standard extension trait for it,
+// `std::os::wasi::fs::MetadataExt`, is nightly-only (rust-lang/rust#71213)
+// and unavailable on stable, so there's no portable way to read real block
+// counts here. Approximate actual disk usage from the logical size instead,
+// rounded up to the traditional 512-byte `du` block; that's the same
+// fallback GNU uses on filesystems that don't report real block counts.
+#[cfg(target_os = "wasi")]
+fn get_blocks(_path: &Path, metadata: &Metadata) -> u64 {
+    metadata.len().div_ceil(512)
 }
 
 // `File::open()` alone cannot open directories on Windows (`CreateFile`
@@ -259,7 +270,7 @@ fn get_blocks(path: &Path, _metadata: &Metadata) -> u64 {
     size_on_disk / 1024 * 2
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
 #[expect(
     clippy::unnecessary_wraps,
     reason = "fn sig must match on all platforms"
@@ -269,6 +280,14 @@ fn get_file_info(_path: &Path, metadata: &Metadata) -> Option<FileInfo> {
         file_id: metadata.ino() as u128,
         dev_id: metadata.dev(),
     })
+}
+
+// No portable inode/dev pair on WASI (see `get_blocks`'s doc comment);
+// return None so callers skip hard-link dedup instead of guessing at an
+// identity this platform can't actually report.
+#[cfg(target_os = "wasi")]
+fn get_file_info(_path: &Path, _metadata: &Metadata) -> Option<FileInfo> {
+    None
 }
 
 #[cfg(windows)]
