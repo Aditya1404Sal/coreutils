@@ -571,10 +571,7 @@ where
         } else {
             let formatter = ErrorFormatter::new(crate::util_name());
             let code = match e.kind() {
-                ErrorKind::MissingRequiredArgument => {
-                    formatter.print_too_few_operands(last.as_deref(), exit_code)
-                }
-                ErrorKind::TooFewValues => {
+                ErrorKind::MissingRequiredArgument | ErrorKind::TooFewValues => {
                     formatter.print_too_few_operands(last.as_deref(), exit_code)
                 }
                 ErrorKind::WrongNumberOfValues => {
@@ -595,7 +592,7 @@ where
                 ErrorKind::TooManyValues => {
                     let extra = e
                         .get(ContextKind::InvalidValue)
-                        .map(|v| v.to_string())
+                        .map(ToString::to_string)
                         .or_else(|| last.clone());
                     formatter.print_extra_operand(extra.as_deref(), exit_code)
                 }

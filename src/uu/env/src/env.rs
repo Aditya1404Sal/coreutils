@@ -752,7 +752,7 @@ impl EnvAppData {
                                 translate!("env-error-use-s-shebang")
                             );
                         }
-                        return Err(uucore::error::USimpleError::new(code, ""));
+                        return Err(USimpleError::new(code, ""));
                     }
                 }
             }

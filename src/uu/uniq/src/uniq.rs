@@ -657,7 +657,7 @@ fn map_clap_errors(clap_error: Error) -> Box<dyn UError> {
         ErrorKind::UnknownArgument => {
             let arg = clap_error
                 .get(ContextKind::InvalidArg)
-                .map(|v| v.to_string());
+                .map(ToString::to_string);
             match arg {
                 Some(arg) if arg.starts_with("--") => {
                     format!("unrecognized option '{arg}'\n{footer}")
@@ -691,7 +691,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
             // Report and return rather than exit: an embedding host runs uumain in-process.
             let formatter = uucore::clap_localization::ErrorFormatter::new("uniq");
             let code = formatter.print_error(&clap_error, 1);
-            return Err(uucore::error::USimpleError::new(code, ""));
+            return Err(USimpleError::new(code, ""));
         }
     };
 

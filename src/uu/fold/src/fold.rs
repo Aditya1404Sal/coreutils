@@ -293,9 +293,8 @@ fn last_utf8_boundary_at_or_before(line: &[u8], width: usize) -> usize {
         let Some(end) = width.checked_sub(back) else {
             break;
         };
-        match line.get(end) {
-            Some(byte) if (0x80..=0xBF).contains(byte) => continue,
-            _ => return end,
+        if !matches!(line.get(end), Some(byte) if (0x80..=0xBF).contains(byte)) {
+            return end;
         }
     }
     width
