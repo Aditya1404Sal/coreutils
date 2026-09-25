@@ -713,22 +713,16 @@ fn display_group<'a>(
 }
 
 #[cfg(not(unix))]
-fn display_uname(_metadata: &Metadata, config: &Config, _uid_cache: &mut ()) -> &'static str {
-    // No uid to report on this platform; with `-n` fall back to "0" so the
-    // output still looks numeric, matching the intent of --numeric-uid-gid.
-    if config.long.numeric_uid_gid {
-        "0"
-    } else {
-        "somebody"
-    }
+fn display_uname(_metadata: &Metadata, _config: &Config, _uid_cache: &mut ()) -> &'static str {
+    // This sandbox has one fixed identity and no /etc/passwd entry for it, like every file
+    // GNU ls ever sees here; GNU itself falls back to the numeric uid when a name doesn't
+    // resolve to one, so plain `-l` prints the number too, not just `-ln`.
+    "1000"
 }
 
 #[cfg(not(unix))]
-fn display_group(_metadata: &Metadata, config: &Config, _gid_cache: &mut ()) -> &'static str {
-    if config.long.numeric_uid_gid {
-        return "0";
-    }
-    "somegroup"
+fn display_group(_metadata: &Metadata, _config: &Config, _gid_cache: &mut ()) -> &'static str {
+    "1000"
 }
 
 fn display_date(
