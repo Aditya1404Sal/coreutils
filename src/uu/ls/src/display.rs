@@ -625,7 +625,10 @@ fn write_fill(out: &mut BufWriter<Stdout>, cur: usize, pad: usize, tab_size: usi
     let mut cur = cur;
     while let Some(quot) = cur.checked_div(tab_size) {
         let next_stop = (quot + 1) * tab_size;
-        if next_stop > target {
+        // A tab only ever costs one byte, the same as a single space; it's worth emitting
+        // only when it covers *more* than one column's worth of fill, or it wouldn't save
+        // anything over just writing that one space -- which is what GNU actually does here.
+        if next_stop > target || next_stop - cur < 2 {
             break;
         }
         write!(out, "\t")?;
