@@ -48,6 +48,12 @@ pub enum CsplitError {
     InvalidPattern(String, Option<PatternProblem>),
     #[error("{}", translate!("csplit-error-invalid-number", "number" => _0.quote()))]
     InvalidNumber(String),
+    // `.quote()` (`os_display`) always wraps in straight quotes for shell-safety; GNU's own
+    // curly ones (matching the rest of a diagnostic like `line number out of range`'s pattern
+    // quoting, and `seq_usage_error` in the bash tool crate) are hardcoded directly here since
+    // nothing in this dependency produces them.
+    #[error("{}", translate!("csplit-error-integer-expected-after-delimiter", "pattern" => format!("\u{2018}{_0}\u{2019}")))]
+    IntegerExpectedAfterDelimiter(String),
     #[error("{}", translate!("csplit-error-suffix-format-incorrect"))]
     SuffixFormatIncorrect,
     #[error("{}", translate!("csplit-error-suffix-format-too-many-percents"))]
