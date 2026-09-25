@@ -159,7 +159,10 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
 
     if let Some(values) = matches.get_many::<String>(options::NUMBER) {
         for number in values {
-            write_factors_str(number.trim().as_bytes(), &mut w, print_exponents)?;
+            // GNU does not trim a command-line operand: leading/trailing whitespace (unlike
+            // in a line read from stdin, further down) makes it "not a valid positive
+            // integer" like any other non-digit character would.
+            write_factors_str(number.as_bytes(), &mut w, print_exponents)?;
         }
     } else {
         let stdin = stdin();
