@@ -41,6 +41,7 @@ tr-error-complement-more-than-one-unique = when translating with complemented ch
   string2 must map all characters in the domain to one
 tr-error-backwards-range = range-endpoints of '{ $start }-{ $end }' are in reverse collating sequence order
 tr-error-multiple-char-in-equivalence = { $chars }: equivalence class operand must be a single character
+tr-error-equivalence-class-in-set2 = [=c=] expressions may not appear in string2 when translating
 
 # Diagnostic labels: what the caret points at in a set
 tr-diag-label-backwards-range = did you mean '{ $suggestion }'?

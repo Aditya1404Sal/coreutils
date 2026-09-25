@@ -47,6 +47,7 @@ pub enum BadSequence {
     ComplementMoreThanOneUniqueInSet2,
     BackwardsRange { end: u32, start: u32 },
     MultipleCharInEquivalence(String),
+    EquivalenceClassInSet2,
 }
 
 /// A range endpoint, printed the way the shell would show it: as itself for
@@ -135,6 +136,9 @@ impl Display for BadSequence {
                 "{}",
                 translate!("tr-error-multiple-char-in-equivalence", "chars" => s)
             ),
+            Self::EquivalenceClassInSet2 => {
+                write!(f, "{}", translate!("tr-error-equivalence-class-in-set2"))
+            }
         }
     }
 }
@@ -288,6 +292,15 @@ impl Sequence {
         {
             return Err(SequenceError::whole_set(
                 BadSequence::ClassExceptLowerUpperInSet2,
+                2,
+            ));
+        }
+        // `[=c=]` parses down into a plain `Char`, indistinguishable at this point from `c`
+        // written literally, so this checks the raw text: GNU rejects any `[=...=]` written in
+        // string2 while translating, not just ones that survived parsing.
+        if translating && set2_str.windows(2).any(|pair| pair == b"[=") {
+            return Err(SequenceError::whole_set(
+                BadSequence::EquivalenceClassInSet2,
                 2,
             ));
         }

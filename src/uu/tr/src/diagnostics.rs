@@ -80,7 +80,8 @@ fn describe(error: &BadSequence) -> Option<(Option<String>, Option<&'static str>
         )),
         BadSequence::MultipleCharRepeatInSet2
         | BadSequence::ClassExceptLowerUpperInSet2
-        | BadSequence::ClassInSet2NotMatchedBySet1 => Some((None, None)),
+        | BadSequence::ClassInSet2NotMatchedBySet1
+        | BadSequence::EquivalenceClassInSet2 => Some((None, None)),
         BadSequence::Set1LongerSet2EndsInClass => Some((
             Some(translate!("tr-diag-label-set1-longer-set2-ends-in-class")),
             None,
