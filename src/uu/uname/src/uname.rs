@@ -89,6 +89,10 @@ impl UNameOutput {
         opt.then(|| OsString::from(real))
     }
 
+    // On WASI the body below never actually fails (there's no `platform_info` call to fail),
+    // but the signature is shared with the non-WASI body right after it, which does use `?` --
+    // `UResult` has to stay for both.
+    #[cfg_attr(target_os = "wasi", allow(clippy::unnecessary_wraps))]
     pub fn new(opts: &Options) -> UResult<Self> {
         // `platform_info` has no real WASI backend: it answers `sysname=wasi`,
         // `nodename=localhost`, `release`/`version=0.0.0`, `osname=WASI` -- accurate to the
@@ -115,7 +119,7 @@ impl UNameOutput {
                 || opts.hardware_platform);
             let nodename =
                 std::env::var("GOLEM_WORKER_NAME").unwrap_or_else(|_| "localhost".to_owned());
-            return Ok(Self {
+            Ok(Self {
                 kernel_name: Self::field(
                     opts.kernel_name || opts.all || opts.all_labeled || none,
                     "Linux",
@@ -136,7 +140,7 @@ impl UNameOutput {
                 hardware_platform: opts
                     .hardware_platform
                     .then(|| translate!("uname-unknown").into()),
-            });
+            })
         }
         #[cfg(not(target_os = "wasi"))]
         {
