@@ -340,6 +340,14 @@ pub fn canonicalize<P: AsRef<Path>>(
 ) -> IOResult<PathBuf> {
     const SYMLINKS_TO_LOOK_FOR_LOOPS: i32 = 20;
     let original = original.as_ref();
+    // POSIX/GNU realpath(3) rejects an empty path outright (ENOENT), in every mode -- even
+    // `-m`/`MissingHandling::Missing`, which otherwise tolerates a nonexistent path. Left
+    // unchecked, `original.is_absolute()` below is false for "", so an empty path falls
+    // into the relative-path branch and resolves to the current directory itself (`readlink
+    // -f ''` printed `/` instead of erroring; confirmed against the oracle).
+    if original.as_os_str().is_empty() {
+        return Err(Error::from(ErrorKind::NotFound));
+    }
     let has_to_be_directory =
         (miss_mode == MissingHandling::Normal || miss_mode == MissingHandling::Existing) && {
             let path_str = original.to_string_lossy();
