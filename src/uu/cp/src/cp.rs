@@ -2166,6 +2166,20 @@ fn paths_are_same_entry(source: &Path, dest: &Path) -> bool {
         .is_some_and(|(s, d)| s == d)
 }
 
+/// Like [`paths_refer_to_same_file`], but also catches same-file-through-a-symlink cases that
+/// stat-identity alone misses on this target: on wasm32-wasip2, `FileInformation` (`rustix`'s
+/// `stat`/`lstat`) does not reliably resolve a *symlink* to the same identity as the file it
+/// points to (two hardlinks to one file, with no symlink involved, compare equal correctly --
+/// this is specifically about a symlink in the comparison), so `cp f l` for `l -> f` was not
+/// recognized as the same file at all: it silently truncated `f` while "copying" it onto
+/// itself. `paths_are_same_entry`'s path-canonicalizing comparison (already used elsewhere in
+/// this file for a related check) does not depend on that identity machinery, so it is used as
+/// a fallback whenever the caller wants symlinks dereferenced for the comparison.
+fn refers_to_same_file(source: &Path, dest: &Path, dereference: bool) -> bool {
+    paths_refer_to_same_file(source, dest, dereference)
+        || (dereference && paths_are_same_entry(source, dest))
+}
+
 /// Decide whether source and destination files are the same and
 /// copying is forbidden.
 ///
@@ -2184,7 +2198,7 @@ fn is_forbidden_to_copy_to_same_file(
     // only disable dereference if both source and dest is symlink and dereference flag is disabled
     let dereference_to_compare =
         options.dereference(source_in_command_line) || (!source_is_symlink || !dest_is_symlink);
-    if !paths_refer_to_same_file(source, dest, dereference_to_compare) {
+    if !refers_to_same_file(source, dest, dereference_to_compare) {
         return false;
     }
     if options.backup != BackupMode::None {
@@ -2708,7 +2722,7 @@ fn copy_file(
                 translate!("cp-error-not-writing-dangling-symlink", "dest" => dest.quote()),
             ));
         }
-        if paths_refer_to_same_file(source, dest, true)
+        if refers_to_same_file(source, dest, true)
             && matches!(
                 options.overwrite,
                 OverwriteMode::Clobber(ClobberMode::RemoveDestination)
@@ -2738,7 +2752,7 @@ fn copy_file(
                 OverwriteMode::Clobber(ClobberMode::RemoveDestination)
             ))
     {
-        if paths_refer_to_same_file(source, dest, true) && options.copy_mode == CopyMode::Link {
+        if refers_to_same_file(source, dest, true) && options.copy_mode == CopyMode::Link {
             if source_is_symlink {
                 if !dest_is_symlink {
                     return Ok(());
