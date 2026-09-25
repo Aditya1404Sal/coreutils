@@ -20,6 +20,7 @@ use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+#[cfg(not(target_os = "wasi"))]
 use std::thread;
 use std::time::SystemTime;
 use thiserror::Error;
@@ -1189,7 +1190,15 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     }
 
     // Use separate thread to print output, so we can print finished results while computation is still running
+    //
+    // WASI has no threads (`thread::spawn` panics there instead of returning an error -- the
+    // same gap `dd` hits, see its `spawn_progress_updater` doc comment); `rx` and `stat_printer`
+    // are carried to the end of this function unstarted there instead, and run synchronously
+    // once the walk below has queued everything, in place of the join. The final report is the
+    // same either way; only printing finished subtrees *while* still walking later ones is lost,
+    // since nothing can run concurrently with the walk here.
     let (print_tx, rx) = mpsc::channel::<UResult<StatPrintInfo>>();
+    #[cfg(not(target_os = "wasi"))]
     let printing_thread = thread::spawn(move || stat_printer.print_stats(&rx));
 
     // Check existence of path provided in argument
@@ -1293,9 +1302,12 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
 
     drop(print_tx);
 
+    #[cfg(not(target_os = "wasi"))]
     printing_thread
         .join()
         .map_err(|_| USimpleError::new(1, translate!("du-error-printing-thread-panicked")))??;
+    #[cfg(target_os = "wasi")]
+    stat_printer.print_stats(&rx)?;
 
     Ok(())
 }
