@@ -51,8 +51,11 @@ cp-help-copy-contents = NotImplemented: copy contents of special files when recu
 
 # Error messages
 cp-error-missing-file-operand = missing file operand
+    Try 'cp --help' for more information.
 cp-error-missing-destination-operand = missing destination file operand after { $source }
+    Try 'cp --help' for more information.
 cp-error-extra-operand = extra operand { $operand }
+    Try 'cp --help' for more information.
 cp-error-same-file = { $source } and { $dest } are the same file
 cp-error-backing-up-destroy-source = backing up { $dest } might destroy source;  { $source } not copied
 cp-error-cannot-open-for-reading = cannot open { $source } for reading
