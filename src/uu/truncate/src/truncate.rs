@@ -463,6 +463,21 @@ fn parse_mode_and_size(size_string: &str) -> Result<TruncateMode, ParseSizeError
         if is_modifier(c) {
             size_string = &size_string[1..];
         }
+        // GNU `truncate`'s SIZE is plain decimal plus a unit suffix: unlike some other
+        // utilities that share this parser, it does not accept `0x`/`0b` numbers (nor does a
+        // leading `0` mean octal -- `010` is decimal 10, not 8).
+        if size_string.len() >= 2 {
+            let prefix = &size_string.as_bytes()[..2];
+            if prefix.eq_ignore_ascii_case(b"0x") || prefix.eq_ignore_ascii_case(b"0b") {
+                // `os_display::Quotable::quote` always uses straight quotes; GNU's own
+                // messages use curly ones once the locale is more than plain C/POSIX (this
+                // sandbox's default -- see `Session::set_identity`), matching the other
+                // hand-formatted diagnostics in this crate (e.g. `seq_usage_error`).
+                return Err(ParseSizeError::ParseFailure(format!(
+                    "\u{2018}{size_string}\u{2019}"
+                )));
+            }
+        }
         let allow_list = allow_list_with_all_suffixes("EgGkKmMPQRtTYZ");
         let allow_list_ref = allow_list.iter().map(AsRef::as_ref).collect::<Vec<&str>>();
         Parser::default()
