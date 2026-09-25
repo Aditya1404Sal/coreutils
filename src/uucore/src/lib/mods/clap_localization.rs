@@ -155,9 +155,48 @@ impl<'a> ErrorFormatter<'a> {
     pub fn print_missing_operand(&self, last: Option<&str>, exit_code: i32) -> i32 {
         let message = match last {
             Some(last) if last == "-" || !last.starts_with('-') => {
-                format!("missing operand after '{last}'")
+                format!("missing operand after {}", crate::display::gnu_quote(last))
             }
             _ => "missing operand".to_owned(),
+        };
+        self.print_gnu_usage_error(&message);
+        exit_code
+    }
+
+    /// A missing destination operand, as `cp`/`mv` report it (two-operand SOURCE/DEST
+    /// utilities have their own wording for this, distinct from `print_missing_operand`'s
+    /// generic one -- confirmed against the oracle for both). Unlike
+    /// `print_missing_operand`, GNU names the last operand here even when it looks like an
+    /// option (it was still consumed as this argument's value, typically because of a `--`).
+    pub fn print_missing_destination_operand(&self, last: Option<&str>, exit_code: i32) -> i32 {
+        let message = match last {
+            Some(last) => format!("missing destination file operand after '{last}'"),
+            None => "missing file operand".to_owned(),
+        };
+        self.print_gnu_usage_error(&message);
+        exit_code
+    }
+
+    /// Too few operands for a fixed-count positional (clap's `TooFewValues`, or the
+    /// too-few direction of `WrongNumberOfValues`): `mv`/`cp`'s own "missing destination
+    /// file operand" wording (confirmed against the oracle), `print_missing_operand`'s
+    /// generic one for every other utility this can happen to (`link`, confirmed; whatever
+    /// else has a fixed- or minimum-count positional).
+    fn print_too_few_operands(&self, last: Option<&str>, exit_code: i32) -> i32 {
+        if matches!(self.util_name, "cp" | "mv") {
+            self.print_missing_destination_operand(last, exit_code)
+        } else {
+            self.print_missing_operand(last, exit_code)
+        }
+    }
+
+    /// An extra operand past what a fixed- or maximum-count positional takes, as GNU
+    /// reports it (confirmed against the oracle: `link a b c` -> `extra operand 'c'`,
+    /// naming the *first* operand past the count wanted, not simply the last one typed).
+    pub fn print_extra_operand(&self, extra: Option<&str>, exit_code: i32) -> i32 {
+        let message = match extra {
+            Some(extra) => format!("extra operand {}", crate::display::gnu_quote(extra)),
+            None => "extra operand".to_owned(),
         };
         self.print_gnu_usage_error(&message);
         exit_code
@@ -513,19 +552,67 @@ where
         .get(1..)
         .and_then(<[OsString]>::last)
         .map(|arg| arg.to_string_lossy().into_owned());
+    // For a fixed-count positional that got too *many* values (`WrongNumberOfValues`; a
+    // range's own too-many is `TooManyValues`, handled separately, with the value clap
+    // already names): GNU names the first operand past the count it wanted, which the
+    // error itself doesn't carry, only the count -- so this keeps the raw operand
+    // positions (argv[0] aside) to look it up by that count.
+    let operands: Vec<String> = args
+        .get(1..)
+        .map(|rest| {
+            rest.iter()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
     cmd.try_get_matches_from(args).map_err(|e| {
         if e.exit_code() == 0 {
             e.into() // Preserve help/version
         } else {
             let formatter = ErrorFormatter::new(crate::util_name());
-            let code = if e.kind() == ErrorKind::MissingRequiredArgument {
-                formatter.print_missing_operand(last.as_deref(), exit_code)
-            } else {
-                formatter.print_error(&e, exit_code)
+            let code = match e.kind() {
+                ErrorKind::MissingRequiredArgument => {
+                    formatter.print_too_few_operands(last.as_deref(), exit_code)
+                }
+                ErrorKind::TooFewValues => {
+                    formatter.print_too_few_operands(last.as_deref(), exit_code)
+                }
+                ErrorKind::WrongNumberOfValues => {
+                    let expected = e
+                        .get(ContextKind::ExpectedNumValues)
+                        .and_then(context_as_usize);
+                    let actual = e
+                        .get(ContextKind::ActualNumValues)
+                        .and_then(context_as_usize);
+                    match (expected, actual) {
+                        (Some(expected), Some(actual)) if actual > expected => {
+                            let extra = operands.get(expected).map(String::as_str);
+                            formatter.print_extra_operand(extra, exit_code)
+                        }
+                        _ => formatter.print_too_few_operands(last.as_deref(), exit_code),
+                    }
+                }
+                ErrorKind::TooManyValues => {
+                    let extra = e
+                        .get(ContextKind::InvalidValue)
+                        .map(|v| v.to_string())
+                        .or_else(|| last.clone());
+                    formatter.print_extra_operand(extra.as_deref(), exit_code)
+                }
+                _ => formatter.print_error(&e, exit_code),
             };
             USimpleError::new(code, "")
         }
     })
+}
+
+/// A clap context number, as a `usize` (the counts clap attaches to argument-count errors are
+/// never negative).
+fn context_as_usize(value: &clap::error::ContextValue) -> Option<usize> {
+    match value {
+        clap::error::ContextValue::Number(n) => usize::try_from(*n).ok(),
+        _ => None,
+    }
 }
 
 /// Handles a clap error directly with a custom exit code.
