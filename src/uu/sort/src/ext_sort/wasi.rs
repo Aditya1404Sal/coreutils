@@ -123,7 +123,16 @@ pub fn ext_sort(
     // moderately sized inputs; very large files may cause OOM.
     let mut input = Vec::new();
     for file in files {
-        file?.read_to_end(&mut input)?;
+        let mut buf = Vec::new();
+        file?.read_to_end(&mut buf)?;
+        // A file's own last line still ends at that file's EOF, even without a trailing
+        // separator: GNU sort never splices one file's unterminated tail onto the next
+        // file's head. Since every file here gets flattened into one buffer before it is
+        // split into lines, force that boundary in the byte stream itself.
+        if !buf.is_empty() && input.last().is_some_and(|&b| b != separator) {
+            input.push(separator);
+        }
+        input.extend_from_slice(&buf);
     }
 
     if input.is_empty() {
