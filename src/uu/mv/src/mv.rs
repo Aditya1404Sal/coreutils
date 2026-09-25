@@ -12,7 +12,6 @@ mod error;
 mod hardlink;
 
 use clap::builder::ValueParser;
-use clap::error::ErrorKind;
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
@@ -180,13 +179,13 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         .collect();
 
     if files.len() == 1 && !matches.contains_id(OPT_TARGET_DIRECTORY) {
-        let err = uu_app().error(
-            ErrorKind::TooFewValues,
-            translate!("mv-error-insufficient-arguments", "arg_files" => ARG_FILES),
-        );
-        // Report and return rather than exit: an embedding host runs uumain in-process.
+        // GNU's own wording for this ("missing destination file operand after 'x'") does
+        // not come from clap's generic argument-count machinery, so this builds it
+        // directly instead of manufacturing a clap error only to reformat its own message
+        // right back out.
         let formatter = uucore::clap_localization::ErrorFormatter::new(uucore::util_name());
-        let code = formatter.print_error(&err, 1);
+        let code = formatter
+            .print_missing_destination_operand(Some(&files[0].to_string_lossy()), 1);
         return Err(USimpleError::new(code, ""));
     }
 
