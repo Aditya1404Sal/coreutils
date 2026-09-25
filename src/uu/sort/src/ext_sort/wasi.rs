@@ -12,17 +12,81 @@ use std::io::Read;
 use std::iter;
 
 use itertools::Itertools;
-use uucore::error::{UError, UResult};
+use uucore::error::{UError, UResult, USimpleError};
 
 use crate::chunks::{self, Chunk};
 use crate::tmp_dir::TmpDirWrapper;
 use crate::{GlobalSettings, SortError, compare_by, open, print_sorted, sort_by};
 use crate::{Line, Output};
 
+/// The most input sort holds in memory here, where it has no external merge: 64 MiB, and 2
+/// million lines, whose bookkeeping costs more than short lines themselves.
+const MAX_INPUT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_INPUT_LINES: usize = 2_000_000;
+
+fn input_too_large() -> Box<dyn UError> {
+    USimpleError::new(
+        2,
+        "input over 64 MiB or 2000000 lines is unsupported in bash-tool",
+    )
+}
+
+/// A read error naming the input it came from.
+#[derive(Debug)]
+struct ReadFailed(std::path::PathBuf, std::io::Error);
+
+impl std::fmt::Display for ReadFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use uucore::display::Quotable;
+        write!(
+            f,
+            "read failed: {}: {}",
+            self.0.maybe_quote(),
+            uucore::error::strip_errno(&self.1)
+        )
+    }
+}
+
+impl std::error::Error for ReadFailed {}
+
+/// `reader`, whose read errors name `path` as GNU sort reports them (`read failed: PATH: …`).
+pub fn named_reader(path: &OsStr, reader: Box<dyn Read + Send>) -> Box<dyn Read + Send> {
+    struct Named(std::path::PathBuf, Box<dyn Read + Send>);
+    impl Read for Named {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.1
+                .read(buf)
+                .map_err(|error| std::io::Error::other(ReadFailed(self.0.clone(), error)))
+        }
+    }
+    Box::new(Named(std::path::PathBuf::from(path), reader))
+}
+
+/// Appends all of `reader` to `input`, failing rather than holding more than the limits allow.
+fn read_bounded(mut reader: impl Read, input: &mut Vec<u8>, separator: u8) -> UResult<()> {
+    let room = MAX_INPUT_BYTES.saturating_sub(input.len()) as u64;
+    if let Err(error) = reader.by_ref().take(room + 1).read_to_end(input) {
+        // A read error that names its input is reported as GNU sort words it.
+        if error
+            .get_ref()
+            .is_some_and(<dyn std::error::Error + Send + Sync>::is::<ReadFailed>)
+        {
+            return Err(USimpleError::new(2, error.to_string()));
+        }
+        return Err(error.into());
+    }
+    if input.len() > MAX_INPUT_BYTES
+        || memchr::memchr_iter(separator, input).count() > MAX_INPUT_LINES
+    {
+        return Err(input_too_large());
+    }
+    Ok(())
+}
+
 /// Read one input whole and split it into lines, or `None` for an empty input.
 fn read_whole(path: &OsStr, settings: &GlobalSettings) -> UResult<Option<Chunk>> {
     let mut input = Vec::new();
-    open(path)?.read_to_end(&mut input)?;
+    read_bounded(open(path)?, &mut input, settings.line_ending.into())?;
     if input.is_empty() {
         return Ok(None);
     }
@@ -117,22 +181,23 @@ pub fn ext_sort(
     _tmp_dir: &mut TmpDirWrapper,
 ) -> UResult<()> {
     let separator = settings.line_ending.into();
-    // Read all input into memory at once. Unlike the threaded path which uses
-    // chunked buffered reads, WASI has no threads so we accept the memory cost.
-    // Note: there is no size limit here — WASI targets are expected to handle
-    // moderately sized inputs; very large files may cause OOM.
+    // Read all input into memory at once, within the limits: WASI has no threads for the
+    // chunked, merging path.
     let mut input = Vec::new();
     for file in files {
-        let mut buf = Vec::new();
-        file?.read_to_end(&mut buf)?;
         // A file's own last line still ends at that file's EOF, even without a trailing
-        // separator: GNU sort never splices one file's unterminated tail onto the next
-        // file's head. Since every file here gets flattened into one buffer before it is
-        // split into lines, force that boundary in the byte stream itself.
-        if !buf.is_empty() && input.last().is_some_and(|&b| b != separator) {
+        // separator: GNU sort never splices one file's unterminated tail onto the next file's
+        // head. Since every file here gets flattened into one buffer before it is split into
+        // lines, force that boundary in the byte stream itself, before this file's own bytes
+        // (not after -- read_bounded appends straight into the shared, bounds-checked `input`,
+        // so there's no separate per-file buffer left to inspect afterward). Inserting it
+        // unconditionally before every file but the first is equivalent to only inserting it
+        // before the next *non-empty* file: an empty file leaves `input` already ending with
+        // the separator this just added, so the check before the following file is a no-op.
+        if !input.is_empty() && input.last() != Some(&separator) {
             input.push(separator);
         }
-        input.extend_from_slice(&buf);
+        read_bounded(file?, &mut input, separator)?;
     }
 
     if input.is_empty() {

@@ -35,6 +35,26 @@ use windows_sys::Win32::{Foundation::SYSTEMTIME, System::SystemInformation::SetS
 
 use uucore::parser::shortcut_value_parser::ShortcutValueParser;
 
+/// The local time zone as `TZ` says it now. jiff caches the system zone for minutes, but an
+/// embedder that runs this utility in-process may change `TZ` between calls; WASI has no system
+/// zone of its own, so an unset `TZ` means UTC there.
+fn local_zone() -> TimeZone {
+    match std::env::var_os("TZ") {
+        #[cfg(target_os = "wasi")]
+        None => TimeZone::UTC,
+        #[cfg(not(target_os = "wasi"))]
+        None => TimeZone::try_system().unwrap_or(TimeZone::UTC),
+        Some(tz) if tz.is_empty() => TimeZone::UTC,
+        Some(tz) => {
+            let tz = tz.to_string_lossy();
+            let name = tz.strip_prefix(':').unwrap_or(&tz);
+            TimeZone::get(name)
+                .or_else(|_| TimeZone::posix(name))
+                .unwrap_or(TimeZone::UTC)
+        }
+    }
+}
+
 /// OHOS helper: pass through the system time zone ID returned by
 /// TimeService (OH_TimeService_GetTimeZone, e.g. "Asia/Shanghai") and
 /// resolve it against the embedded IANA tzdata (jiff-tzdb) so that
@@ -426,7 +446,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         }
         #[cfg(not(target_env = "ohos"))]
         {
-            Zoned::now()
+            Timestamp::now().to_zoned(local_zone())
         }
     };
 
@@ -611,7 +631,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
             #[cfg(target_env = "ohos")]
             let date = ts.to_zoned(ohos_system_zone());
             #[cfg(not(target_env = "ohos"))]
-            let date = ts.to_zoned(TimeZone::try_system().unwrap_or(TimeZone::UTC));
+            let date = ts.to_zoned(local_zone());
             let iter = std::iter::once(Ok(ParsedDateTime::InRange(date)));
             Box::new(iter)
         }
@@ -620,7 +640,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
             #[cfg(target_env = "ohos")]
             let date = resolution.to_zoned(ohos_system_zone());
             #[cfg(not(target_env = "ohos"))]
-            let date = resolution.to_zoned(TimeZone::system());
+            let date = resolution.to_zoned(local_zone());
             let iter = std::iter::once(Ok(ParsedDateTime::InRange(date)));
             Box::new(iter)
         }

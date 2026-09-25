@@ -140,13 +140,33 @@ mod format {
     pub(crate) const YYYYMMDDHHMM_OFFSET: &str = "%Y-%m-%d %H:%M %z";
 }
 
+/// The local time zone as `TZ` says it now. jiff caches the system zone for minutes, but an
+/// embedder that runs this utility in-process may change `TZ` between calls; WASI has no system
+/// zone of its own, so an unset `TZ` means UTC there.
+fn local_zone() -> TimeZone {
+    match std::env::var_os("TZ") {
+        #[cfg(target_os = "wasi")]
+        None => TimeZone::UTC,
+        #[cfg(not(target_os = "wasi"))]
+        None => TimeZone::try_system().unwrap_or(TimeZone::UTC),
+        Some(tz) if tz.is_empty() => TimeZone::UTC,
+        Some(tz) => {
+            let tz = tz.to_string_lossy();
+            let name = tz.strip_prefix(':').unwrap_or(&tz);
+            TimeZone::get(name)
+                .or_else(|_| TimeZone::posix(name))
+                .unwrap_or(TimeZone::UTC)
+        }
+    }
+}
+
 fn timestamp_to_filetime(ts: Timestamp) -> FileTime {
     FileTime::from_system_time(SystemTime::from(ts))
 }
 
 fn filetime_to_zoned(ft: &FileTime) -> Option<Zoned> {
     let ts = Timestamp::new(ft.unix_seconds(), ft.nanoseconds() as i32).ok()?;
-    Some(Zoned::new(ts, TimeZone::system()))
+    Some(Zoned::new(ts, local_zone()))
 }
 
 /// Whether all characters in the string are digits.
@@ -766,27 +786,29 @@ fn parse_date(ref_zoned: Zoned, s: &str) -> Result<FileTime, TouchError> {
     // Tue Dec  3 ...
     // ("%c", POSIX_LOCALE_FORMAT),
     //
-    if let Ok(parsed) = strtime::parse(format::POSIX_LOCALE, s)
-        .and_then(|tm| tm.to_datetime())
-        .and_then(|dt| TimeZone::UTC.to_zoned(dt))
-    {
-        return Ok(timestamp_to_filetime(parsed.timestamp()));
+    // A date and time without an offset is local time, as in GNU touch; one with an offset is
+    // that instant.
+    let local = |tm: strtime::BrokenDownTime| {
+        tm.to_datetime()
+            .and_then(|dt| local_zone().to_ambiguous_zoned(dt).unambiguous())
+            .map(|zoned| zoned.timestamp())
+    };
+    if let Ok(parsed) = strtime::parse(format::POSIX_LOCALE, s).and_then(local) {
+        return Ok(timestamp_to_filetime(parsed));
     }
 
     // Also support other formats found in the GNU tests like
     // in tests/misc/stat-nanoseconds.sh
     // or tests/touch/no-rights.sh
-    for fmt in [
-        format::YYYYMMDDHHMMS,
-        format::YYYYMMDDHHMMSS,
-        format::YYYYMMDDHHMM_OFFSET,
-    ] {
-        if let Ok(parsed) = strtime::parse(fmt, s)
-            .and_then(|tm| tm.to_datetime())
-            .and_then(|dt| TimeZone::UTC.to_zoned(dt))
-        {
-            return Ok(timestamp_to_filetime(parsed.timestamp()));
+    for fmt in [format::YYYYMMDDHHMMS, format::YYYYMMDDHHMMSS] {
+        if let Ok(parsed) = strtime::parse(fmt, s).and_then(local) {
+            return Ok(timestamp_to_filetime(parsed));
         }
+    }
+    if let Ok(parsed) =
+        strtime::parse(format::YYYYMMDDHHMM_OFFSET, s).and_then(|tm| tm.to_timestamp())
+    {
+        return Ok(timestamp_to_filetime(parsed));
     }
 
     // "Equivalent to %Y-%m-%d (the ISO 8601 date format). (C99)"
@@ -794,7 +816,7 @@ fn parse_date(ref_zoned: Zoned, s: &str) -> Result<FileTime, TouchError> {
     if let Ok(filetime) = strtime::parse(format::ISO_8601, s)
         .and_then(|tm| tm.to_date())
         .and_then(|date| {
-            TimeZone::system()
+            local_zone()
                 .to_ambiguous_zoned(date.to_datetime(Time::midnight()))
                 .unambiguous()
         })
@@ -852,7 +874,7 @@ fn prepend_century(s: &str) -> UResult<String> {
 fn parse_timestamp(s: &str) -> UResult<FileTime> {
     use format::{YYYYMMDDHHMM, YYYYMMDDHHMM_DOT_SS};
 
-    let current_year = || Timestamp::now().to_zoned(TimeZone::system()).year();
+    let current_year = || Timestamp::now().to_zoned(local_zone()).year();
 
     let (format, ts) = match s.chars().count() {
         15 => (YYYYMMDDHHMM_DOT_SS, s.to_owned()),
@@ -895,7 +917,7 @@ fn parse_timestamp(s: &str) -> UResult<FileTime> {
     // Due to daylight saving time switch, local time can jump from 1:59 AM to
     // 3:00 AM, in which case any time between 2:00 AM and 2:59 AM is not valid.
     // Jiff's `to_ambiguous_zoned(...).unambiguous()` handles this case.
-    let local = TimeZone::system()
+    let local = local_zone()
         .to_ambiguous_zoned(dt)
         .unambiguous()
         .map_err(|_| {
