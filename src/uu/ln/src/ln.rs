@@ -476,6 +476,15 @@ pub fn link(src: &Path, dst: &Path, settings: &Settings) -> LnResult<()> {
             )
         } else if hard_link_src.as_ref().is_some_and(|p| p.is_dir()) {
             LnError::FailedToCreateHardLinkDir(source.to_path_buf())
+        } else if e.kind() == io::ErrorKind::NotFound && !link_target.exists() {
+            // GNU stats the source before linking and reports a missing source this way,
+            // distinct from a failure to create the link itself (permission, cross-device,
+            // an existing destination, ...), which keeps the "failed to create hard link"
+            // wording below.
+            LnError::IoContext(
+                UIoError::from(e),
+                translate!("ln-failed-to-access", "file" => source.quote()),
+            )
         } else {
             LnError::IoContext(
                 UIoError::from(e),
