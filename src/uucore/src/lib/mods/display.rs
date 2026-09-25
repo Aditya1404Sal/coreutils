@@ -44,6 +44,19 @@ pub use os_display::{Quotable, Quoted};
 /// FIXME: Invalid Unicode will produce an error on Windows. That could be fixed by
 /// using low-level library calls and bypassing `io::Write`. This is not a big priority
 /// because broken filenames are much rarer on Windows than on Unix.
+/// Quotes `text` the way GNU's own diagnostics do in a locale with Unicode quotation marks
+/// (`LC_MESSAGES` beyond plain `C`/`POSIX` -- this sandbox's default; see
+/// `bash-shell::session::Session::set_identity`): wrapped in U+2018/U+2019 (`'x'`), with no
+/// escaping of the content, unlike [`Quotable::quote`] (which exists for a different purpose:
+/// producing a string that is safe to paste back into a shell, and always uses plain ASCII
+/// quotes for that). Most of this crate's own diagnostics were written before this sandbox
+/// had a locale at all and so use `Quotable::quote`, which is a real, if cosmetic, difference
+/// from GNU in every one of them; this exists for new/touched call sites to match GNU exactly
+/// instead of adding another one.
+pub fn gnu_quote(text: impl std::fmt::Display) -> String {
+    format!("\u{2018}{text}\u{2019}")
+}
+
 pub fn println_verbatim<S: AsRef<OsStr>>(text: S) -> io::Result<()> {
     let mut stdout = io::stdout().lock();
     stdout.write_all_os(text.as_ref())?;
