@@ -16,7 +16,6 @@ use clap::{Arg, ArgAction, Command};
 use memchr::memchr3_iter;
 use num_bigint::BigUint;
 use num_prime::nt_funcs::{factorize64, factorize128, factors};
-use uucore::display::Quotable;
 use uucore::error::{FromIo, UResult, USimpleError, set_exit_code, strip_errno};
 use uucore::translate;
 use uucore::{format_usage, show_error, show_if_err};
@@ -77,7 +76,11 @@ fn parse_num(slice: &[u8]) -> UResult<Number> {
     let err_invalid = |s: &str| {
         USimpleError::new(
             1,
-            format!("{} {}", s.quote(), translate!("factor-error-invalid-int")),
+            format!(
+                "{} {}",
+                uucore::display::gnu_quote(s),
+                translate!("factor-error-invalid-int")
+            ),
         )
     };
     let num = str::from_utf8(slice).map_err(|_| err_invalid(&NumError(slice).to_string()))?;
