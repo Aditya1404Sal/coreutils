@@ -223,6 +223,17 @@ fn shr2(s: &str) -> String {
 pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     let matches = uucore::clap_localization::handle_clap_result(uu_app(), args)?;
 
+    // GNU's check, in place of clap's conflict error: -t names a time on its own.
+    if matches.contains_id(options::sources::TIMESTAMP)
+        && (matches.contains_id(options::sources::DATE)
+            || matches.contains_id(options::sources::REFERENCE))
+    {
+        return Err(uucore::error::UUsageError::new(
+            1,
+            translate!("touch-error-multiple-sources"),
+        ));
+    }
+
     let mut filenames: Vec<&OsString> = matches
         .get_many::<OsString>(ARG_FILES)
         .ok_or_else(|| {
@@ -319,8 +330,7 @@ pub fn uu_app() -> Command {
                 .long(options::sources::DATE)
                 .allow_hyphen_values(true)
                 .help(translate!("touch-help-date"))
-                .value_name("STRING")
-                .conflicts_with(options::sources::TIMESTAMP),
+                .value_name("STRING"),
         )
         .arg(
             Arg::new(options::FORCE)
@@ -355,8 +365,7 @@ pub fn uu_app() -> Command {
                 .help(translate!("touch-help-reference"))
                 .value_name("FILE")
                 .value_parser(ValueParser::os_string())
-                .value_hint(clap::ValueHint::AnyPath)
-                .conflicts_with(options::sources::TIMESTAMP),
+                .value_hint(clap::ValueHint::AnyPath),
         )
         .arg(
             Arg::new(options::TIME)
@@ -503,7 +512,11 @@ fn touch_file(
     };
 
     if let Err(e) = metadata_result {
-        if e.kind() != ErrorKind::NotFound {
+        // GNU tries to create before it sets times, so a path through a file fails to create
+        // ("cannot touch ...: Not a directory"); with -c there is no creating to try.
+        if e.kind() != ErrorKind::NotFound
+            && (opts.no_create || e.kind() != ErrorKind::NotADirectory)
+        {
             return Err(e.map_err_context(
                 || translate!("touch-error-setting-times-of", "filename" => filename.quote()),
             ));
