@@ -33,12 +33,12 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         verbose: matches.get_flag(OPT_VERBOSE),
     };
 
-    for path in matches
+    for operand in matches
         .get_many::<OsString>(ARG_DIRS)
         .unwrap_or_default()
         .map(Path::new)
     {
-        if let Err(error) = remove(path, opts) {
+        if let Err(error) = remove(operand, opts) {
             let Error { error, path } = error;
 
             if opts.ignore && dir_not_empty(&error, path) {
@@ -81,9 +81,15 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
                 }
             }
 
+            // GNU names a parent that -p could not remove as a directory.
+            let message = if path == operand {
+                "rmdir-error-failed-to-remove"
+            } else {
+                "rmdir-error-failed-to-remove-parent"
+            };
             show_error!(
                 "{}",
-                translate!("rmdir-error-failed-to-remove", "path" => path.quote(), "err" => strip_errno(&error))
+                translate!(message, "path" => path.quote(), "err" => strip_errno(&error))
             );
         }
     }
@@ -133,7 +139,23 @@ fn remove_single(path: &Path, opts: Opts) -> Result<(), Error<'_>> {
             Path::new(os_str)
         })
     };
-    remove_dir(stripped.unwrap_or(path)).map_err(|error| Error { error, path })
+    let target = stripped.unwrap_or(path);
+    // What Linux's rmdir(2) says for these, where WASI's differs: an empty name names nothing,
+    // and a last component of "." is refused whatever the directory holds.
+    if target.as_os_str().is_empty() {
+        return Err(Error {
+            error: io::Error::from_raw_os_error(libc::ENOENT),
+            path,
+        });
+    }
+    let bytes = target.as_os_str().as_encoded_bytes();
+    if bytes == b"." || bytes.ends_with(b"/.") {
+        return Err(Error {
+            error: io::Error::from_raw_os_error(libc::EINVAL),
+            path,
+        });
+    }
+    remove_dir(target).map_err(|error| Error { error, path })
 }
 
 fn strip_trailing_slashes_from_path(path: &[u8]) -> &[u8] {
