@@ -18,15 +18,15 @@ fmt-tab-width-help = Traite les tabulations comme TABWIDTH espaces pour détermi
 
 # Messages d'erreur
 fmt-error-invalid-goal = objectif invalide : {$goal}
-fmt-error-goal-greater-than-width = GOAL ne peut pas être supérieur à WIDTH.
+fmt-error-goal-greater-than-width = largeur invalide : '{$goal}' : Valeur trop grande pour le type de données
 fmt-error-invalid-width = largeur invalide : {$width}
 fmt-error-width-out-of-range = largeur invalide : '{$width}' : Résultat numérique hors limites
 fmt-error-invalid-tabwidth = Spécification TABWIDTH invalide : {$tabwidth}
 fmt-error-first-option-width = option invalide -- {$option} ; -WIDTH n'est reconnu que lorsqu'il est la première
   option ; utilisez -w N à la place
   Essayez 'fmt --help' pour plus d'informations.
-fmt-error-read = erreur de lecture
 fmt-error-invalid-width-malformed = largeur invalide : {$width}
 fmt-error-cannot-open-for-reading = impossible d'ouvrir {$file} en lecture
 fmt-error-cannot-get-metadata = impossible d'obtenir les métadonnées pour {$file}
+fmt-error-reading-directory = erreur de lecture de {$file} : Is a directory
 fmt-error-failed-to-write-output = échec de l'écriture de sortie

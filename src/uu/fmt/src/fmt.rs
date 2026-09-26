@@ -27,8 +27,11 @@ mod parasplit;
 enum FmtError {
     #[error("{}", translate!("fmt-error-invalid-goal", "goal" => .0.quote()))]
     InvalidGoal(String),
-    #[error("{}", translate!("fmt-error-goal-greater-than-width"))]
-    GoalGreaterThanWidth,
+    // GNU's own message for this reuses its "invalid width" wording, quoting the *goal* value,
+    // with the same wording an `xstrtoul` overflow gets (confirmed against the oracle) even
+    // though nothing here actually overflowed a numeric parse.
+    #[error("{}", translate!("fmt-error-goal-greater-than-width", "goal" => .0))]
+    GoalGreaterThanWidth(usize),
     #[error("{}", translate!("fmt-error-invalid-width", "width" => .0.quote()))]
     InvalidWidth(String),
     #[error("{}", translate!("fmt-error-width-out-of-range", "width" => .0))]
@@ -37,8 +40,6 @@ enum FmtError {
     InvalidTabWidth(String),
     #[error("{}", translate!("fmt-error-first-option-width", "option" => .0))]
     FirstOptionWidth(char),
-    #[error("{}", translate!("fmt-error-read"))]
-    ReadError,
     #[error("{}", translate!("fmt-error-invalid-width-malformed", "width" => .0.quote()))]
     InvalidWidthMalformed(String),
 }
@@ -132,7 +133,7 @@ impl FmtOptions {
         let (width, goal) = match (width_opt, goal_opt) {
             (Some(w), Some(g)) => {
                 if g > w {
-                    return Err(FmtError::GoalGreaterThanWidth.into());
+                    return Err(FmtError::GoalGreaterThanWidth(g).into());
                 }
                 (w, g)
             }
@@ -157,7 +158,7 @@ impl FmtOptions {
             }
             (None, Some(g)) => {
                 if g > DEFAULT_WIDTH {
-                    return Err(FmtError::GoalGreaterThanWidth.into());
+                    return Err(FmtError::GoalGreaterThanWidth(g).into());
                 }
                 let w = g + DEFAULT_GOAL_WIDTH_SLACK;
                 (w, g)
@@ -227,7 +228,13 @@ fn process_file(
             )?
             .is_dir()
         {
-            return Err(FmtError::ReadError.into());
+            // GNU names the file and the real reason ("Is a directory"), not the generic
+            // "read error" `FmtError::ReadError` gives an *actual* I/O failure while streaming
+            // records from an already-open file (this is caught before that, from a `stat`).
+            return Err(USimpleError::new(
+                1,
+                translate!("fmt-error-reading-directory", "file" => path.quote()),
+            ));
         }
 
         Box::new(f) as Box<dyn Read + 'static>
