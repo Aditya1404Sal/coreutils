@@ -5,7 +5,6 @@
 
 // spell-checker:ignore powf seps replacen
 
-use uucore::display::Quotable;
 use uucore::i18n::decimal::{locale_decimal_separator, locale_grouping_separator};
 use uucore::translate;
 
@@ -189,7 +188,9 @@ fn detailed_error_message(s: &str, unit: Unit, unit_separator: &str) -> Option<S
         .ok()?;
 
     if number_prefix == "." {
-        return Some(translate!("numfmt-error-invalid-suffix", "input" => s.quote()));
+        return Some(
+            translate!("numfmt-error-invalid-suffix", "input" => uucore::display::gnu_quote(s)),
+        );
     }
 
     if number_prefix.ends_with('.') {
@@ -200,21 +201,23 @@ fn detailed_error_message(s: &str, unit: Unit, unit_separator: &str) -> Option<S
 
     if valid_part != s && valid_part.parse::<f64>().is_ok() {
         return match s.chars().nth(valid_part.len()) {
-            Some('+' | '-') => {
-                Some(translate!("numfmt-error-invalid-suffix", "input" => s.quote()))
-            }
+            Some('+' | '-') => Some(
+                translate!("numfmt-error-invalid-suffix", "input" => uucore::display::gnu_quote(s)),
+            ),
             Some(v) if RawSuffix::try_from(&v).is_ok() => Some(
                 translate!("numfmt-error-rejecting-suffix", "number" => valid_part, "suffix" => s[valid_part.len()..]),
             ),
 
-            _ => Some(translate!("numfmt-error-invalid-suffix", "input" => s.quote())),
+            _ => Some(
+                translate!("numfmt-error-invalid-suffix", "input" => uucore::display::gnu_quote(s)),
+            ),
         };
     }
 
     if valid_part != s {
         let trailing = s[valid_part.len()..].trim_start();
         return Some(
-            translate!("numfmt-error-invalid-specific-suffix", "input" => s.quote(), "suffix" => trailing.quote()),
+            translate!("numfmt-error-invalid-specific-suffix", "input" => uucore::display::gnu_quote(s), "suffix" => uucore::display::gnu_quote(trailing)),
         );
     }
     None
@@ -231,7 +234,9 @@ fn parse_number_part(s: &str, input: &str) -> Result<ParsedNumber> {
         return Err(translate!("numfmt-error-invalid-number", "input" => input));
     }
     if s.bytes().any(|b| b == b'e' || b == b'E') {
-        return Err(translate!("numfmt-error-invalid-suffix", "input" => input.quote()));
+        return Err(
+            translate!("numfmt-error-invalid-suffix", "input" => uucore::display::gnu_quote(input)),
+        );
     }
 
     if let Ok(n) = s.parse::<i128>() {
@@ -267,7 +272,9 @@ fn parse_suffix(
 
     let with_i = trimmed.ends_with('i');
     if with_i && ![Unit::Auto, Unit::Iec(true)].contains(&unit) {
-        return Err(translate!("numfmt-error-invalid-suffix", "input" => s.quote()));
+        return Err(
+            translate!("numfmt-error-invalid-suffix", "input" => uucore::display::gnu_quote(s)),
+        );
     }
     let mut iter = trimmed.chars();
     if with_i {
@@ -294,13 +301,17 @@ fn parse_suffix(
             } else if unit_separator.is_empty() {
                 0
             } else {
-                return Err(translate!("numfmt-error-invalid-suffix", "input" => s.quote()));
+                return Err(
+                    translate!("numfmt-error-invalid-suffix", "input" => uucore::display::gnu_quote(s)),
+                );
             }
         } else {
             let number_trimmed = number_part.trim_end();
             let whitespace = number_part.len() - number_trimmed.len();
             if whitespace > 1 {
-                return Err(translate!("numfmt-error-invalid-suffix", "input" => s.quote()));
+                return Err(
+                    translate!("numfmt-error-invalid-suffix", "input" => uucore::display::gnu_quote(s)),
+                );
             }
             whitespace
         };
