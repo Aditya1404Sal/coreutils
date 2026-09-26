@@ -70,7 +70,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
             Ok(0) => {
                 return Err(USimpleError::new(
                     1,
-                    translate!("fold-error-width-out-of-range", "width" => inp_width.quote()),
+                    translate!("fold-error-width-zero", "width" => inp_width.quote()),
                 ));
             }
             Ok(parsed_width) => parsed_width,
@@ -155,6 +155,17 @@ fn handle_obsolete(args: &[String]) -> (Vec<String>, Option<String>) {
     (args.to_vec(), None)
 }
 
+/// GNU quotes only the empty name (`''`) in a diagnostic -- an ordinary missing or unreadable
+/// name (e.g. `/tmp/nosuch`, or a directory) is reported bare, so this can't just be
+/// `filename.quote()`.
+fn quote_if_empty(filename: &str) -> String {
+    if filename.is_empty() {
+        "''".to_string()
+    } else {
+        filename.to_string()
+    }
+}
+
 fn fold(
     filenames: &[String],
     bytes: bool,
@@ -176,38 +187,38 @@ fn fold(
             match File::open(Path::new(filename)) {
                 Ok(f) => file_buf = f,
                 Err(e) => {
-                    // GNU quotes only the empty name (`''`) -- an ordinary missing name (e.g.
-                    // `/tmp/nosuch`) is reported bare, so this can't just be `filename.quote()`.
-                    let name = if filename.is_empty() {
-                        "''".to_string()
-                    } else {
-                        filename.to_string()
-                    };
-                    show!(e.map_err_context(|| name));
+                    show!(e.map_err_context(|| quote_if_empty(filename)));
                     continue;
                 }
             }
             &mut file_buf as &mut dyn Read
         });
 
-        if bytes {
-            fold_file_bytewise(buffer, spaces, width, &mut output)?;
+        // A read failure partway through (e.g. a directory: opening one succeeds, only an
+        // actual read fails) is reported the same way as an open failure -- by name, and kept
+        // processing the remaining operands -- not the generic, nameless error `?` would
+        // propagate as instead.
+        let read_result = if bytes {
+            fold_file_bytewise(buffer, spaces, width, &mut output, filename)
         } else {
             let mode = if characters {
                 WidthMode::Characters
             } else {
                 WidthMode::Columns
             };
-            fold_file(buffer, spaces, width, mode, &mut output)?;
-        }
-        // Flush this file's output now rather than at the very end: GNU reports the next
-        // operand's error (a missing or unopenable file, `show!` above) only after this one's
-        // output has already appeared, and a `BufWriter` held open across the whole loop would
-        // otherwise let a later file's immediate stderr write overtake this one's buffered
-        // stdout content.
+            fold_file(buffer, spaces, width, mode, &mut output, filename)
+        };
+        // Flush this operand's output now rather than at the very end: GNU reports the next
+        // operand's error (a missing or unopenable file, or this one's own read failure just
+        // below) only after this one's output has already appeared, and a `BufWriter` held open
+        // across the whole loop would otherwise let a later, immediate stderr write overtake
+        // this one's buffered stdout content.
         output
             .flush()
             .map_err_context(|| translate!("fold-error-failed-to-write"))?;
+        if let Err(e) = read_result {
+            show!(e);
+        }
     }
 
     output
@@ -229,6 +240,7 @@ fn fold_file_bytewise<T: Read, W: Write>(
     spaces: bool,
     width: usize,
     output: &mut W,
+    filename: &str,
 ) -> UResult<()> {
     let mut line = Vec::new();
 
@@ -241,7 +253,7 @@ fn fold_file_bytewise<T: Read, W: Write>(
         while line.len() <= width {
             let buf = file
                 .fill_buf()
-                .map_err_context(|| translate!("fold-error-readline"))?;
+                .map_err_context(|| quote_if_empty(filename))?;
             if buf.is_empty() {
                 break;
             }
@@ -721,6 +733,7 @@ fn fold_file<T: Read, W: Write>(
     width: usize,
     mode: WidthMode,
     writer: &mut W,
+    filename: &str,
 ) -> UResult<()> {
     let mut output = Vec::new();
     let mut col_count = 0;
@@ -741,7 +754,7 @@ fn fold_file<T: Read, W: Write>(
         loop {
             let buffer = file
                 .fill_buf()
-                .map_err_context(|| translate!("fold-error-readline"))?;
+                .map_err_context(|| quote_if_empty(filename))?;
             if buffer.is_empty() {
                 break;
             }
