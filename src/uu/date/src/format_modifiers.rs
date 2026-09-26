@@ -468,8 +468,9 @@ fn apply_modifiers(value: &str, parsed: &ParsedSpec<'_>) -> Result<String, Forma
             .is_some_and(|c| !matches!(c, '+' | '-') && c.is_ascii_digit())
     {
         let default_w = get_default_width(specifier);
-        // Add sign only if explicit width provided OR result exceeds default width
-        if width.is_some() || (default_w > 0 && result.len() > default_w) {
+        // Add sign only if the width asked for is wider than the default one, or the
+        // result exceeds the default width (GNU's rule for years: `%+4Y` is `2024`).
+        if width.is_some_and(|w| w > default_w) || (default_w > 0 && result.len() > default_w) {
             result.insert(0, '+');
         }
     }
