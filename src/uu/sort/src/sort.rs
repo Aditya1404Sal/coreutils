@@ -2547,8 +2547,8 @@ pub fn uu_app() -> Command {
                 "human-numeric",
                 "month",
                 "numeric",
-                "version",
                 "random",
+                "version",
             ])),
     )
     .arg(make_sort_mode_arg(

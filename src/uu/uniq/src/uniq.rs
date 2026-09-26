@@ -874,7 +874,7 @@ pub fn uu_app() -> Command {
             Arg::new(options::GROUP)
                 .long(options::GROUP)
                 .value_parser(ShortcutValueParser::new([
-                    "separate", "prepend", "append", "both",
+                    "prepend", "append", "separate", "both",
                 ]))
                 .help(translate!("uniq-help-group"))
                 .value_name("group-method")
