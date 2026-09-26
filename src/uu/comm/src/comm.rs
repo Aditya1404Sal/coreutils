@@ -200,6 +200,14 @@ fn comm(
     let mut input_error = false;
 
     while na != 0 || nb != 0 {
+        // Flush whatever the previous iteration queued before this one's order check, which
+        // (on a violation) prints straight to stderr, unbuffered -- otherwise that write
+        // overtakes this `BufWriter`'s still-unflushed content from earlier lines, and GNU's
+        // own line-by-line ordering (this line's output, *then* the next line's order error)
+        // comes out reversed.
+        writer
+            .flush()
+            .map_err_context(|| translate!("comm-error-write"))?;
         let ord = match (na, nb) {
             (0, _) => Ordering::Greater,
             (_, 0) => Ordering::Less,

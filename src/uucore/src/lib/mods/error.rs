@@ -809,6 +809,18 @@ impl UClapError<Result<clap::ArgMatches, ClapErrorWrapper>>
     }
 }
 
+impl ClapErrorWrapper {
+    /// The wrapped `clap::Error`, for a caller building its own GNU-style diagnostic instead of
+    /// clap's own -- in particular one that needs the short flag for an argument. A short flag
+    /// isn't always in the error itself (`Arg`'s own rendering always prefers a long name when
+    /// one exists, so an error naming `--lines` gives no way back to `-n`); that needs the
+    /// original [`clap::Command`], which this error doesn't carry, but a caller that still has it
+    /// in hand can look it up from here.
+    pub fn error(&self) -> &clap::Error {
+        &self.error
+    }
+}
+
 impl UError for ClapErrorWrapper {
     fn code(&self) -> i32 {
         // If the error is a DisplayHelp or DisplayVersion variant,
@@ -825,23 +837,115 @@ impl UError for ClapErrorWrapper {
 
 impl Error for ClapErrorWrapper {}
 
-// This is abuse of the Display trait
+/// The classes of `clap::Error` [`gnu_clap_message`] can translate without a [`clap::Command`] in
+/// hand: everything it needs is already in the error's own context. A missing-argument-value
+/// error (`ErrorKind::InvalidValue` with an empty invalid value) is deliberately *not* one of
+/// these -- GNU's wording for it names the option's short flag (`option requires an argument --
+/// 'n'`), which a `clap::Error` alone has no way back to (see [`ClapErrorWrapper::error`]); a
+/// caller with the original `Command` handles that one instead.
+fn gnu_clap_message(error: &clap::Error) -> Option<String> {
+    use clap::error::{ContextKind, ContextValue};
+
+    match error.kind() {
+        clap::error::ErrorKind::UnknownArgument => {
+            let ContextValue::String(invalid_arg) = error.get(ContextKind::InvalidArg)? else {
+                return None;
+            };
+            Some(if invalid_arg.starts_with("--") {
+                format!("unrecognized option '{invalid_arg}'")
+            } else if let Some(short) = invalid_arg.strip_prefix('-') {
+                format!("invalid option -- '{short}'")
+            } else {
+                format!("extra operand '{invalid_arg}'")
+            })
+        }
+        // A positional operand past the max this argument accepts (e.g. a third file where
+        // only two are allowed) -- reported the same way as any other extra operand.
+        clap::error::ErrorKind::TooManyValues => {
+            let ContextValue::String(invalid_value) = error.get(ContextKind::InvalidValue)? else {
+                return None;
+            };
+            Some(format!("extra operand '{invalid_value}'"))
+        }
+        clap::error::ErrorKind::InvalidValue => {
+            let ContextValue::String(invalid_arg) = error.get(ContextKind::InvalidArg)? else {
+                return None;
+            };
+            let ContextValue::String(invalid_value) = error.get(ContextKind::InvalidValue)? else {
+                return None;
+            };
+            if invalid_value.is_empty() {
+                return None;
+            }
+            // `Arg`'s own rendering is "--flag <PLACEHOLDER>" for a value-taking arg (or
+            // "--flag[=<PLACEHOLDER>]" for one whose value is optional -- no space before the
+            // bracket there), or "-f <PLACEHOLDER>" for a short-only flag: the flag spelling
+            // itself is whatever comes before the first space, `=` or `[`, whichever is first.
+            let flag = invalid_arg
+                .find([' ', '=', '['])
+                .map_or(invalid_arg.as_str(), |end| &invalid_arg[..end]);
+            let mut message = format!("invalid argument '{invalid_value}' for '{flag}'");
+            if let Some(ContextValue::Strings(valid)) = error.get(ContextKind::ValidValue) {
+                // Declaration order, not sorted: GNU's own order here is each tool's own (e.g.
+                // `sort --sort`'s is alphabetical, `uniq --group`'s is not), and this crate's
+                // `Arg::value_parser` choices are declared in the same order as the upstream
+                // GNU enum they port, so what clap's context already gives back is GNU's own
+                // order too.
+                message.push_str("\nValid arguments are:");
+                for value in valid {
+                    message.push_str(&format!("\n  - '{value}'"));
+                }
+            }
+            Some(message)
+        }
+        _ => None,
+    }
+}
+
 impl Display for ClapErrorWrapper {
-    fn fmt(&self, _f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
-        // Check if printing succeeds. For DisplayHelp and DisplayVersion,
-        // error.print() writes to stdout, so we need to detect write failures
-        // (e.g., when stdout is /dev/full).
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        // clap prints its own (colored, paginated) rendering for these; GNU has nothing
+        // equivalent to translate them into, so this keeps doing what it always did.
+        if matches!(
+            self.error.kind(),
+            clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+        ) {
+            // Check if printing succeeds. For DisplayHelp and DisplayVersion,
+            // error.print() writes to stdout, so we need to detect write failures
+            // (e.g., when stdout is /dev/full).
+            if let Err(print_fail) = self.error.print() {
+                // Mark that printing failed so code() can return the appropriate exit code
+                self.print_failed.set(true);
+                // Try to display this error to stderr, but ignore if that fails too
+                // since we're already in an error state.
+                let _ = writeln!(std::io::stderr(), "{}: {print_fail}", crate::util_name());
+                // Mirror GNU behavior: when failing to print help or version, exit with error
+                // code. This avoids silent failures when stdout is full or closed.
+                set_exit_code(1);
+            }
+            return Ok(());
+        }
+
+        if let Some(message) = gnu_clap_message(&self.error) {
+            // Matches what a non-clap `UError` gets from `usage()` plus its caller's own
+            // "{util}: " prefix (see e.g. `uu_error_text` in bash-shell): this writes only the
+            // part after that prefix, with the "Try '--help'" line already folded in, since
+            // this error's own `usage()` stays the trait default (`false`) -- a caller that
+            // *does* check `usage()` before appending its own copy would otherwise double it.
+            return write!(
+                f,
+                "{message}\nTry '{} --help' for more information.",
+                crate::util_name()
+            );
+        }
+
+        // Anything this doesn't translate: fall back to clap's own rendering, exactly as
+        // before this existed.
         if let Err(print_fail) = self.error.print() {
-            // Mark that printing failed so code() can return the appropriate exit code
             self.print_failed.set(true);
-            // Try to display this error to stderr, but ignore if that fails too
-            // since we're already in an error state.
             let _ = writeln!(std::io::stderr(), "{}: {print_fail}", crate::util_name());
-            // Mirror GNU behavior: when failing to print help or version, exit with error code.
-            // This avoids silent failures when stdout is full or closed.
             set_exit_code(1);
         }
-        // Always return Ok(()) to satisfy Display's contract and prevent panic
         Ok(())
     }
 }

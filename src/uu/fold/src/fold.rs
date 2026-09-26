@@ -176,7 +176,14 @@ fn fold(
             match File::open(Path::new(filename)) {
                 Ok(f) => file_buf = f,
                 Err(e) => {
-                    show!(e.map_err_context(|| filename.to_string()));
+                    // GNU quotes only the empty name (`''`) -- an ordinary missing name (e.g.
+                    // `/tmp/nosuch`) is reported bare, so this can't just be `filename.quote()`.
+                    let name = if filename.is_empty() {
+                        "''".to_string()
+                    } else {
+                        filename.to_string()
+                    };
+                    show!(e.map_err_context(|| name));
                     continue;
                 }
             }
@@ -193,6 +200,14 @@ fn fold(
             };
             fold_file(buffer, spaces, width, mode, &mut output)?;
         }
+        // Flush this file's output now rather than at the very end: GNU reports the next
+        // operand's error (a missing or unopenable file, `show!` above) only after this one's
+        // output has already appeared, and a `BufWriter` held open across the whole loop would
+        // otherwise let a later file's immediate stderr write overtake this one's buffered
+        // stdout content.
+        output
+            .flush()
+            .map_err_context(|| translate!("fold-error-failed-to-write"))?;
     }
 
     output
