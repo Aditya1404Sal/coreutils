@@ -27,32 +27,26 @@ pub struct PatternProblem {
     pub label: Option<String>,
 }
 
-/// An operand as GNU csplit quotes it in a diagnostic under a UTF-8 locale: `‘1’`. `.quote()`
-/// (`os_display`) always uses straight quotes, for shell-safety.
-fn curly(operand: &str) -> String {
-    format!("\u{2018}{operand}\u{2019}")
-}
-
 /// Errors thrown by the csplit command
 #[derive(Debug, Error)]
 pub enum CsplitError {
     #[error("{}", strip_errno(_0))]
     IoError(#[from] io::Error),
-    #[error("{}", translate!("csplit-error-line-out-of-range", "pattern" => curly(_0)))]
+    #[error("{}", translate!("csplit-error-line-out-of-range", "pattern" => uucore::display::gnu_quote(_0)))]
     LineOutOfRange(String),
-    #[error("{}", translate!("csplit-error-line-out-of-range-on-repetition", "pattern" => curly(_0), "repetition" => _1))]
+    #[error("{}", translate!("csplit-error-line-out-of-range-on-repetition", "pattern" => uucore::display::gnu_quote(_0), "repetition" => _1))]
     LineOutOfRangeOnRepetition(String, usize),
-    #[error("{}", translate!("csplit-error-match-not-found", "pattern" => curly(_0)))]
+    #[error("{}", translate!("csplit-error-match-not-found", "pattern" => uucore::display::gnu_quote(_0)))]
     MatchNotFound(String),
-    #[error("{}", translate!("csplit-error-match-not-found-on-repetition", "pattern" => curly(_0), "repetition" => _1))]
+    #[error("{}", translate!("csplit-error-match-not-found-on-repetition", "pattern" => uucore::display::gnu_quote(_0), "repetition" => _1))]
     MatchNotFoundOnRepetition(String, usize),
     #[error("{}", translate!("csplit-error-line-number-is-zero"))]
     LineNumberIsZero,
     #[error("{}", translate!("csplit-error-line-number-smaller-than-previous", "current" => _0, "previous" => _1))]
     LineNumberSmallerThanPrevious(usize, usize),
-    #[error("{}", translate!("csplit-error-invalid-pattern", "pattern" => curly(_0)))]
+    #[error("{}", translate!("csplit-error-invalid-pattern", "pattern" => uucore::display::gnu_quote(_0)))]
     InvalidPattern(String, Option<PatternProblem>),
-    #[error("{}", translate!("csplit-error-invalid-number", "number" => curly(_0)))]
+    #[error("{}", translate!("csplit-error-invalid-number", "number" => uucore::display::gnu_quote(_0)))]
     InvalidNumber(String),
     // `.quote()` (`os_display`) always wraps in straight quotes for shell-safety; GNU's own
     // curly ones (matching the rest of a diagnostic like `line number out of range`'s pattern
