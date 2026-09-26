@@ -15,7 +15,10 @@ use std::num::IntErrorKind;
 use clap::{Arg, ArgAction, Command};
 use memchr::memchr3_iter;
 use num_bigint::BigUint;
-use num_prime::nt_funcs::{factorize64, factorize128, factors};
+use num_prime::FactorizationConfig;
+use num_prime::nt_funcs::{factorize64, factorize128, factors, is_prime};
+
+mod rho;
 use uucore::error::{FromIo, UResult, USimpleError, set_exit_code, strip_errno};
 use uucore::translate;
 use uucore::{format_usage, show_error, show_if_err};
@@ -59,12 +62,38 @@ fn write_factors_str(
         Number::U128(x) => write_result(w, &x, factorize128(x), print_exponents),
         // use num_prime's fallible factorization for anything greater than u128::MAX
         Number::BigUint(x) => {
-            let (prime_factors, remaining) = factors(x.clone(), None);
-            if remaining.is_some() {
-                return Err(USimpleError::new(
-                    1,
-                    translate!("factor-error-factorization-incomplete"),
-                ));
+            // num_prime's trial division, then everything it leaves split to the end, as GNU
+            // does: our own rho up to 192 bits, num_prime's (random) one beyond.
+            let mut trial_division = FactorizationConfig::default();
+            trial_division.rho_trials = 0;
+            let (mut prime_factors, remaining) = factors(x.clone(), Some(trial_division));
+            let mut todo: Vec<(BigUint, usize)> = remaining
+                .unwrap_or_default()
+                .into_iter()
+                .map(|composite| (composite, 0))
+                .collect();
+            while let Some((composite, tries)) = todo.pop() {
+                if is_prime(&composite, None).probably() {
+                    *prime_factors.entry(composite).or_insert(0) += 1;
+                } else if let Some(divisor) = rho::divisor(&composite) {
+                    todo.push((&composite / &divisor, 0));
+                    todo.push((divisor, 0));
+                } else if tries < 8 {
+                    let (found, rest) = factors(composite, None);
+                    for (prime, exponent) in found {
+                        *prime_factors.entry(prime).or_insert(0) += exponent;
+                    }
+                    todo.extend(
+                        rest.unwrap_or_default()
+                            .into_iter()
+                            .map(|rest| (rest, tries + 1)),
+                    );
+                } else {
+                    return Err(USimpleError::new(
+                        1,
+                        translate!("factor-error-factorization-incomplete"),
+                    ));
+                }
             }
             write_result(w, &x, prime_factors, print_exponents)
         }
