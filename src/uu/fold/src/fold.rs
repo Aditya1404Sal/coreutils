@@ -193,6 +193,14 @@ fn fold(
             };
             fold_file(buffer, spaces, width, mode, &mut output)?;
         }
+        // Flush this file's output now rather than at the very end: GNU reports the next
+        // operand's error (a missing or unopenable file, `show!` above) only after this one's
+        // output has already appeared, and a `BufWriter` held open across the whole loop would
+        // otherwise let a later file's immediate stderr write overtake this one's buffered
+        // stdout content.
+        output
+            .flush()
+            .map_err_context(|| translate!("fold-error-failed-to-write"))?;
     }
 
     output
