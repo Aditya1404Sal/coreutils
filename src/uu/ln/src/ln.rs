@@ -49,7 +49,7 @@ pub enum OverwriteMode {
 
 #[derive(Error, Debug)]
 pub enum LnError {
-    #[error("{}", translate!("ln-error-target-is-not-directory", "target" => _0.quote()))]
+    #[error("{}", translate!("ln-error-target-is-not-directory", "target" => _0.quote(), "error" => not_a_directory_reason(_0)))]
     TargetIsNotADirectory(PathBuf),
 
     #[error("{0}")]
@@ -72,6 +72,15 @@ pub enum LnError {
 
     #[error("{}", translate!("ln-failed-to-create-hard-link-dir", "source" => _0.to_string_lossy()))]
     FailedToCreateHardLinkDir(PathBuf),
+}
+
+/// Why `path` cannot hold the links made in it, as GNU words it: the error from looking it up,
+/// or that it is not a directory.
+fn not_a_directory_reason(path: &Path) -> String {
+    match fs::metadata(path) {
+        Err(error) => uucore::error::strip_errno(&error),
+        Ok(_) => "Not a directory".to_owned(),
+    }
 }
 
 impl UError for LnError {
@@ -485,6 +494,12 @@ pub fn link(src: &Path, dst: &Path, settings: &Settings) -> LnResult<()> {
                 UIoError::from(e),
                 translate!("ln-failed-to-access", "file" => source.quote()),
             )
+        } else if e.kind() == io::ErrorKind::AlreadyExists {
+            // GNU names only the link for a failure that is about where it would go.
+            LnError::IoContext(
+                UIoError::from(e),
+                translate!("ln-failed-to-create-hard-link-dest", "dest" => dst.quote()),
+            )
         } else {
             LnError::IoContext(
                 UIoError::from(e),
@@ -511,7 +526,9 @@ pub fn link(src: &Path, dst: &Path, settings: &Settings) -> LnResult<()> {
 
     if settings.verbose {
         let mut out = stdout();
-        write!(out, "{} -> {}", dst.quote(), source.quote())?;
+        // GNU shows a hard link as `=>`, a symbolic one as `->`.
+        let arrow = if settings.symbolic { "->" } else { "=>" };
+        write!(out, "{} {arrow} {}", dst.quote(), source.quote())?;
         match backup_path {
             Some(path) => writeln!(
                 out,
