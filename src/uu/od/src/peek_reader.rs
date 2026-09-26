@@ -114,6 +114,10 @@ impl<R: HasError> HasError for PeekReader<R> {
     fn has_error(&self) -> bool {
         self.inner.has_error()
     }
+
+    fn read_failed(&self) -> bool {
+        self.inner.read_failed()
+    }
 }
 
 #[cfg(test)]

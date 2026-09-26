@@ -225,7 +225,8 @@ impl OdOptions {
                         _ => {
                             return Err(USimpleError::new(
                                 1,
-                                translate!("od-error-radix-invalid", "radix" => s),
+                                // GNU names the one character it looks at.
+                                translate!("od-error-radix-invalid", "radix" => s.chars().next().unwrap_or_default()),
                             ));
                         }
                     }
@@ -540,7 +541,9 @@ where
                 let length = memory_decoder.length();
 
                 if length == 0 {
-                    if !input_decoder.has_error() {
+                    // GNU ends with the offset reached, even after an input failed -- unless
+                    // a read failed with nothing yet dumped or skipped.
+                    if !(input_decoder.read_failed() && input_offset.position() == 0) {
                         input_offset.write_final_offset(writer)?;
                     }
                     break;
@@ -812,6 +815,10 @@ fn open_input_peek_reader(
     // should return  "impl PeekRead + Read + HasError" when supported in (stable) rust
     let inputs = map_input_strings(input_strings);
     let mut mf = MultifileReader::new(inputs);
+    // GNU dumps nothing, not even an offset, when no input could be opened.
+    if mf.nothing_opened() {
+        return Err(1.into());
+    }
     mf.skip(skip_bytes)
         .map_err(|e| USimpleError::new(1, e.to_string()))?;
     let pr = PartialReader::new(mf, read_bytes);
@@ -826,6 +833,10 @@ fn open_input_peek_reader(
 impl<R: HasError> HasError for BufReader<R> {
     fn has_error(&self) -> bool {
         self.get_ref().has_error()
+    }
+
+    fn read_failed(&self) -> bool {
+        self.get_ref().read_failed()
     }
 }
 

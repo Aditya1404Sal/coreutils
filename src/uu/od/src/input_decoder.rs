@@ -77,6 +77,10 @@ where
     fn has_error(&self) -> bool {
         self.input.has_error()
     }
+
+    fn read_failed(&self) -> bool {
+        self.input.read_failed()
+    }
 }
 
 /// Provides access to the internal data in various formats
