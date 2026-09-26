@@ -8,6 +8,7 @@
 use std::fs::File;
 use std::io;
 use std::path::Path;
+use uucore::display::Quotable;
 use uucore::translate;
 
 use crate::{
@@ -48,10 +49,19 @@ pub(crate) fn copy_on_write(
     // uniformly for regular files and stream-backed descriptors alike; permissions are
     // preserved separately by `copy_attributes` when `-p`/`-a` asks for that, same as the
     // stream branch of the `unix`-only platform backend this mirrors.
-    let mut src_file =
-        File::open(source).map_err(|e| CpError::IoErrContext(e, context.to_owned()))?;
-    let mut dst_file =
-        File::create(dest).map_err(|e| CpError::IoErrContext(e, context.to_owned()))?;
+    // GNU names the file whose open failed.
+    let mut src_file = File::open(source).map_err(|e| {
+        CpError::IoErrContext(
+            e,
+            translate!("cp-error-cannot-open-for-reading", "source" => source.quote()),
+        )
+    })?;
+    let mut dst_file = File::create(dest).map_err(|e| {
+        CpError::IoErrContext(
+            e,
+            translate!("cp-error-cannot-create-regular-file", "path" => dest.quote()),
+        )
+    })?;
     io::copy(&mut src_file, &mut dst_file)
         .map_err(|e| CpError::IoErrContext(e, context.to_owned()))?;
 

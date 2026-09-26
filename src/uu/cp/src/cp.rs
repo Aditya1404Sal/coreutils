@@ -1120,7 +1120,12 @@ impl Options {
         if let Some(dir) = &target_dir
             && !dir.is_dir()
         {
-            return Err(CpError::NotADirectory(dir.clone()));
+            return Err(translate!(
+                "cp-error-target-directory",
+                "target" => dir.quote(),
+                "error" => not_a_directory_reason(dir)
+            )
+            .into());
         }
         // cp follows POSIX conventions for overriding options such as "-a",
         // "-d", "--preserve", and "--no-preserve": the last flag on the
@@ -1561,7 +1566,7 @@ fn construct_dest_path(
     if options.no_target_dir && target.is_dir() {
         return Err(
             translate!("cp-error-cannot-overwrite-directory-with-non-directory",
-                              "dir" => target.quote())
+                              "dir" => target.quote(), "source" => source_path.quote())
             .into(),
         );
     }
@@ -2849,6 +2854,16 @@ fn copy_file(
 
     let dest_metadata = dest.symlink_metadata().ok();
 
+    // GNU refuses to replace a directory with a file before trying to copy.
+    if !source_metadata.is_dir() && dest_metadata.as_ref().is_some_and(Metadata::is_dir) {
+        return Err(translate!(
+            "cp-error-cannot-overwrite-directory-with-non-directory",
+            "dir" => dest.quote(),
+            "source" => source.quote()
+        )
+        .into());
+    }
+
     let dest_permissions = calculate_dest_permissions(
         dest_metadata.as_ref(),
         dest,
@@ -3046,8 +3061,16 @@ fn copy_helper(
         }
     }
 
+    // A trailing slash asks for a directory: GNU fails looking up one that exists as
+    // something else, and creating one that does not exist.
     if path_ends_with_terminator(dest) && !dest.is_dir() {
-        return Err(CpError::NotADirectory(dest.to_path_buf()));
+        let message = if shown(dest).symlink_metadata().is_ok() {
+            translate!("cp-error-cannot-stat-error", "path" => dest.quote(), "error" => "Not a directory")
+        } else {
+            translate!("cp-error-cannot-create-regular-file", "path" => dest.quote())
+                + ": Not a directory"
+        };
+        return Err(message.into());
     }
 
     #[cfg(unix)]
@@ -3164,12 +3187,31 @@ fn copy_link(
     )
 }
 
+/// Why `path` cannot hold the files copied into it, as GNU words it: the error from looking it
+/// up, or that it is not a directory.
+pub(crate) fn not_a_directory_reason(path: &Path) -> String {
+    match fs::metadata(path) {
+        Err(error) => strip_errno(&error),
+        Ok(_) => "Not a directory".to_owned(),
+    }
+}
+
+/// `path` as GNU names it in a message: without the trailing slash a join leaves.
+pub(crate) fn shown(path: &Path) -> &Path {
+    path.to_str()
+        .and_then(|text| text.strip_suffix('/'))
+        .filter(|text| !text.is_empty())
+        .map_or(path, Path::new)
+}
+
 /// Generate an error message if `target` is not the correct `target_type`
 pub fn verify_target_type(target: &Path, target_type: TargetType) -> CopyResult<()> {
     match (target_type, target.is_dir()) {
-        (TargetType::Directory, false) => Err(translate!("cp-error-target-not-directory", "target" => target.quote())
-        .into()),
-        (TargetType::File, true) => Err(translate!("cp-error-cannot-overwrite-directory-with-non-directory", "dir" => target.quote())
+        (TargetType::Directory, false) => Err(translate!(
+            "cp-error-target-not-directory",
+            "target" => target.quote(),
+            "error" => not_a_directory_reason(target)
+        )
         .into()),
         _ => Ok(()),
     }

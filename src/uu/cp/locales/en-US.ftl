@@ -69,10 +69,13 @@ cp-error-omitting-directory = -r not specified; omitting directory { $dir }
 cp-error-cannot-copy-directory-into-itself = cannot copy a directory, { $source }, into itself, { $dest }
 cp-error-will-not-copy-through-symlink = will not copy { $source } through just-created symlink { $dest }
 cp-error-will-not-overwrite-just-created = will not overwrite just-created { $dest } with { $source }
-cp-error-target-not-directory = target: { $target } is not a directory
-cp-error-cannot-overwrite-directory-with-non-directory = cannot overwrite directory { $dir } with non-directory
-cp-error-cannot-overwrite-non-directory-with-directory = cannot overwrite non-directory with directory
+cp-error-target-not-directory = target { $target }: { $error }
+cp-error-target-directory = target directory { $target }: { $error }
+cp-error-cannot-stat-error = cannot stat { $path }: { $error }
+cp-error-cannot-overwrite-directory-with-non-directory = cannot overwrite directory { $dir } with non-directory { $source }
+cp-error-cannot-overwrite-non-directory-with-directory = cannot overwrite non-directory { $dest } with directory { $source }
 cp-error-with-parents-dest-must-be-dir = with --parents, the destination must be a directory
+  Try 'cp --help' for more information.
 cp-error-not-replacing = not replacing { $file }
 cp-error-failed-get-current-dir = failed to get current directory { $error }
 cp-error-failed-set-permissions = cannot set permissions { $path }
@@ -97,7 +100,7 @@ cp-error-cannot-create-regular-file = cannot create regular file { $path }
 cp-error-invalid-attribute = invalid attribute { $value }
 cp-error-failed-to-create-whole-tree = failed to create whole tree
 cp-error-failed-to-create-directory = Failed to create directory: { $error }
-cp-error-backup-format = cp: { $error }
+cp-error-backup-format = { $error }
   Try '{ $exec } --help' for more information.
 cp-error-setting-attributes = setting attributes for { $path }
 cp-error-write = write error
