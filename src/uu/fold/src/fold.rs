@@ -176,7 +176,14 @@ fn fold(
             match File::open(Path::new(filename)) {
                 Ok(f) => file_buf = f,
                 Err(e) => {
-                    show!(e.map_err_context(|| filename.to_string()));
+                    // GNU quotes only the empty name (`''`) -- an ordinary missing name (e.g.
+                    // `/tmp/nosuch`) is reported bare, so this can't just be `filename.quote()`.
+                    let name = if filename.is_empty() {
+                        "''".to_string()
+                    } else {
+                        filename.to_string()
+                    };
+                    show!(e.map_err_context(|| name));
                     continue;
                 }
             }
