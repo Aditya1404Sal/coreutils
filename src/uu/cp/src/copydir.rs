@@ -33,7 +33,7 @@ use walkdir::{DirEntry, WalkDir};
 use crate::set_selinux_context;
 use crate::{
     CopyMode, CopyResult, CpError, Options, aligned_ancestors, context_for, copy_attributes,
-    copy_file,
+    copy_file, shown,
 };
 
 /// Represents a directory that needs permission fixup after copying its contents.
@@ -287,7 +287,21 @@ fn copy_direntry(
     // exist, ...
     if source_is_dir && (dest_is_symlink || !entry.local_to_target.exists()) {
         return if entry.target_is_file || dest_is_symlink {
-            Err(translate!("cp-error-cannot-overwrite-non-directory-with-directory").into())
+            // An existing file target is the non-directory itself, not a path inside it.
+            let dest = if entry.target_is_file {
+                entry
+                    .local_to_target
+                    .parent()
+                    .unwrap_or(&entry.local_to_target)
+            } else {
+                &entry.local_to_target
+            };
+            Err(translate!(
+                "cp-error-cannot-overwrite-non-directory-with-directory",
+                "dest" => shown(dest).quote(),
+                "source" => shown(&entry.source_relative).quote()
+            )
+            .into())
         } else {
             build_dir(
                 &entry.local_to_target,
@@ -298,7 +312,7 @@ fn copy_direntry(
             if options.verbose {
                 println!(
                     "{}",
-                    context_for(&entry.source_relative, &entry.local_to_target)
+                    context_for(&entry.source_relative, shown(&entry.local_to_target))
                 );
             }
             Ok(true)
@@ -393,7 +407,13 @@ pub(crate) fn copy_directory(
     // check if root is a prefix of target
     if path_has_prefix(target, root)? {
         let dest_name = root.file_name().unwrap_or(root.as_os_str());
-        return Err(translate!("cp-error-cannot-copy-directory-into-itself", "source" => root.quote(), "dest" => target.join(dest_name).quote())
+        // The directory it would create: inside an existing target, or the target itself.
+        let dest = if target.is_dir() {
+            target.join(dest_name)
+        } else {
+            target.to_path_buf()
+        };
+        return Err(translate!("cp-error-cannot-copy-directory-into-itself", "source" => root.quote(), "dest" => dest.quote())
         .into());
     }
 

@@ -119,9 +119,22 @@ fn show_permission_denied_error(path: &Path) -> bool {
     true
 }
 
+/// The path to hand the filesystem when removing a directory. WASI refuses a trailing slash
+/// there, and it only asserts what was already checked: that the path names a directory.
+fn dir_removal_path(path: &Path) -> &Path {
+    #[cfg(target_os = "wasi")]
+    if let Some(text) = path.to_str() {
+        let trimmed = text.trim_end_matches('/');
+        if !trimmed.is_empty() {
+            return Path::new(trimmed);
+        }
+    }
+    path
+}
+
 /// Helper function to remove a directory and handle results
 fn remove_dir_with_feedback(path: &Path, options: &Options) -> bool {
-    match fs::remove_dir(path) {
+    match fs::remove_dir(dir_removal_path(path)) {
         Ok(_) => {
             report_verbose_write_error(verbose_removed_directory(path, options));
             false
@@ -590,13 +603,15 @@ pub fn remove(files: &[&OsStr], options: &Options) -> bool {
                 }
             }
 
-            Err(_e) => {
-                // TODO: actually print out the specific error
+            Err(e) => {
                 // TODO: When the error is not about missing files
                 // (e.g., permission), even rm -f should fail with
                 // outputting the error, but there's no easy way.
                 if options.force {
                     false
+                } else if e.kind() != io::ErrorKind::NotFound {
+                    // A path through a file, say: GNU reports the lookup's own error.
+                    show_removal_error(e, file)
                 } else {
                     show_error!(
                         "{}",
@@ -736,7 +751,7 @@ fn remove_dir_recursive(
         }
 
         // Try removing the directory itself.
-        match fs::remove_dir(path) {
+        match fs::remove_dir(dir_removal_path(path)) {
             Err(_) if !error && !is_readable(path) => {
                 // For compatibility with GNU test case
                 // `tests/rm/unread2.sh`, show "Permission denied" in this
@@ -943,7 +958,7 @@ fn prompt_file(path: &Path, options: &Options) -> bool {
         return if metadata.len() == 0 {
             prompt_yes!("remove regular empty file {}?", path.quote())
         } else {
-            prompt_yes!("remove file {}?", path.quote())
+            prompt_yes!("remove regular file {}?", path.quote())
         };
     }
 

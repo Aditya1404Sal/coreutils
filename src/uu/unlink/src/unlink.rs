@@ -23,8 +23,16 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
 
     let path: &Path = matches.get_one::<OsString>(OPT_PATH).unwrap().as_ref();
 
-    remove_file(path)
-        .map_err_context(|| translate!("unlink-error-cannot-unlink", "path" => path.quote()))
+    // unlink(2) on Linux refuses a directory with EISDIR, where other hosts say EPERM.
+    let result = if path.symlink_metadata().is_ok_and(|m| m.is_dir()) {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::IsADirectory,
+            "Is a directory",
+        ))
+    } else {
+        remove_file(path)
+    };
+    result.map_err_context(|| translate!("unlink-error-cannot-unlink", "path" => path.quote()))
 }
 
 pub fn uu_app() -> Command {

@@ -12,7 +12,6 @@ use crate::{
     quoting_style::{QuotingStyle, locale_aware_escape_name},
     show_error, show_warning,
 };
-use os_display::Quotable;
 use std::{
     ffi::{OsStr, OsString},
     num::NonZero,
@@ -212,11 +211,19 @@ fn extract_value<T: Default>(
             let input = locale_aware_escape_name(OsStr::new(input), QuotingStyle::C_NO_QUOTES);
             match e {
                 ExtendedParserError::Overflow(v) | ExtendedParserError::Underflow(v) => {
-                    show_error!("{}: Numerical result out of range", input.quote());
+                    // strerror(ERANGE) as the musl system this build is measured against words
+                    // it, quoted as GNU's printf does in a UTF-8 locale.
+                    show_error!(
+                        "{}: Result not representable",
+                        crate::display::gnu_quote(input.to_string_lossy())
+                    );
                     v
                 }
                 ExtendedParserError::NotNumeric => {
-                    show_error!("{}: expected a numeric value", input.quote());
+                    show_error!(
+                        "{}: expected a numeric value",
+                        crate::display::gnu_quote(input.to_string_lossy())
+                    );
                     Default::default()
                 }
                 ExtendedParserError::PartialMatch(v, rest) => {
@@ -231,7 +238,10 @@ fn extract_value<T: Default>(
                             );
                         }
                     } else {
-                        show_error!("{}: value not completely converted", input.quote());
+                        show_error!(
+                            "{}: value not completely converted",
+                            crate::display::gnu_quote(input.to_string_lossy())
+                        );
                     }
 
                     v

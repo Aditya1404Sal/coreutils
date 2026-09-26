@@ -411,7 +411,13 @@ impl Display for UIoError {
         use std::io::ErrorKind::*;
 
         let message;
-        let message = if self.inner.raw_os_error().is_some() {
+        let message = if cfg!(target_os = "wasi") && self.inner.raw_os_error().is_some() {
+            // WASI's libc words errors as musl does, the libc of the GNU system this build is
+            // measured against: its own text for each errno is the exact one. (Normalizing by
+            // kind would merge EPERM into EACCES, and word EINVAL "Invalid input".)
+            message = strip_errno(&self.inner);
+            &message
+        } else if self.inner.raw_os_error().is_some() {
             // These are errors that come directly from the OS.
             // We want to normalize their messages across systems,
             // and we want to strip the "(os error X)" suffix.

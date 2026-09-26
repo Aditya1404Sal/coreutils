@@ -479,6 +479,18 @@ impl UError for ChecksumError {
     fn code(&self) -> i32 {
         1
     }
+
+    // GNU follows a misused option with where to read more.
+    fn usage(&self) -> bool {
+        matches!(
+            self,
+            Self::CheckOnlyFlag(_)
+                | Self::BinaryTextConflict
+                | Self::TextWithoutUntagged
+                | Self::TagCheck
+                | Self::TextAfterTag
+        )
+    }
 }
 
 /// Reading mode used to compute digest.

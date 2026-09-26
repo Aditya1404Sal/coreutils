@@ -33,6 +33,6 @@ truncate-error-must-specify-size-or-reference = you must specify either ‘--siz
     Try 'truncate --help' for more information.
 truncate-error-division-by-zero = division by zero
 truncate-error-cannot-stat-no-such-file = cannot stat { $filename }: No such file or directory
-truncate-error-value-too-large = Value too large for defined data type
-truncate-error-value-too-large-arg = { $arg }: Value too large for defined data type
+truncate-error-value-too-large = Value too large for data type
+truncate-error-value-too-large-arg = { $arg }: Value too large for data type
 truncate-error-io-block-mul-overflow = overflow in { $num } * { $factor } byte blocks

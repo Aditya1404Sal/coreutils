@@ -62,7 +62,7 @@ numfmt-error-invalid-header = invalid header value { $value }
 numfmt-error-grouping-cannot-be-combined-with-format = --grouping cannot be combined with --format
 numfmt-error-grouping-cannot-be-combined-with-to = grouping cannot be combined with --to
 numfmt-error-delimiter-must-be-single-character = the delimiter must be a single character
-numfmt-error-invalid-number-empty = invalid number: ''
+numfmt-error-invalid-number-empty = invalid number: ‘’
 numfmt-error-invalid-specific-suffix = invalid suffix in input { $input }: { $suffix }
 numfmt-error-invalid-suffix = invalid suffix in input: { $input }
 numfmt-error-write = write error
@@ -70,7 +70,15 @@ numfmt-error-invalid-number = invalid number: ‘{ $input }’
 numfmt-error-missing-i-suffix = missing 'i' suffix in input: '{ $number }{ $suffix }' (e.g Ki/Mi/Gi)
 numfmt-error-rejecting-suffix = rejecting suffix in input: '{ $number }{ $suffix }' (consider using --from)
 numfmt-error-suffix-unsupported-for-unit = This suffix is unsupported for specified unit
-numfmt-error-invalid-unit-argument = invalid argument '{$arg}' for '{$opt}'
+numfmt-error-invalid-unit-argument = invalid argument ‘{$arg}’ for ‘{$opt}’
+  Valid arguments are:{$valid}
+  Try 'numfmt --help' for more information.
+numfmt-error-field-not-a-number = invalid field value ‘{$value}’
+  Try 'numfmt --help' for more information.
+numfmt-error-field-zero = fields are numbered from 1
+  Try 'numfmt --help' for more information.
+numfmt-error-field-decreasing = invalid decreasing range
+  Try 'numfmt --help' for more information.
 numfmt-error-number-too-big = Number is too big and unsupported
 numfmt-error-format-no-percent = format '{ $format }' has no % directive
 numfmt-error-format-ends-in-percent = format '{ $format }' ends in %

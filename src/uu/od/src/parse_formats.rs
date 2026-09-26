@@ -271,7 +271,7 @@ fn parse_type_string(params: &str) -> Result<Vec<ParsedFormatterItemInfo>, Strin
 
     while let Some(type_char) = ch {
         let type_char = format_type(type_char).ok_or_else(|| {
-            translate!("od-error-unexpected-char", "char" => type_char, "spec" => params.quote())
+            translate!("od-error-unexpected-char", "char" => type_char, "spec" => uucore::display::gnu_quote(params))
         })?;
 
         let type_cat = format_type_category(type_char);
@@ -344,7 +344,8 @@ fn parse_type_string(params: &str) -> Result<Vec<ParsedFormatterItemInfo>, Strin
                 translate!(
                     "od-error-invalid-size",
                     "size" => byte_size,
-                    "spec" => params.quote()
+                    "spec" => uucore::display::gnu_quote(params),
+                    "kind" => if type_cat == FormatTypeCategory::Float { "floating point" } else { "integral" }
                 )
             })?
         };

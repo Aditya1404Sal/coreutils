@@ -70,11 +70,13 @@ fn get_mode(matches: &ArgMatches, diag_args: Option<&[OsString]>) -> UResult<Opt
     mode::parse_chmod(DEFAULT_PERM, m, true, mode::get_umask())
         .map(Some)
         .map_err(|err| {
-            if diag_args.is_some_and(|args| err.render_mode_value(args, m, 0, &err.to_string())) {
+            // GNU names the mode, not what is wrong in it.
+            let message = format!("invalid mode {}", uucore::display::gnu_quote(m));
+            if diag_args.is_some_and(|args| err.render_mode_value(args, m, 0, &message)) {
                 // The diagnostic is already on stderr; exit quietly.
                 ExitCode::new(1)
             } else {
-                USimpleError::new(1, err.to_string())
+                USimpleError::new(1, message)
             }
         })
 }
@@ -241,6 +243,12 @@ fn create_dir(path: &Path, is_parent: bool, config: &Config) -> UResult<()> {
         for dir in dirs_to_create.iter().rev() {
             if !dir.exists() {
                 create_single_dir(dir, true, config)?;
+            } else if !dir.is_dir() {
+                // GNU names the parent that is in the way, not the directory asked for.
+                return Err(USimpleError::new(
+                    1,
+                    translate!("mkdir-error-cannot-create-directory", "path" => dir.display(), "error" => "Not a directory"),
+                ));
             }
         }
     }

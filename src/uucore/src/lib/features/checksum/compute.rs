@@ -37,6 +37,10 @@ pub struct ChecksumComputeOptions {
 
     /// Whether to finish lines with '\n' or '\0'.
     pub line_ending: LineEnding,
+
+    /// Whether standard input was named on the command line, so that a legacy sum names it
+    /// `-` as GNU's does, rather than leaving it unnamed as when no file is given.
+    pub stdin_named: bool,
 }
 
 /// Whether to write the digest as hexadecimal or encoded in base64.
@@ -170,8 +174,8 @@ fn write_legacy_checksum(
         (algo, output) => unreachable!("Bug: Invalid legacy checksum ({algo:?}, {output:?})"),
     }
 
-    // Print the filename after a space if not stdin
-    if escaped_filename != "-" {
+    // Print the filename after a space, and stdin's only when it was named.
+    if escaped_filename != "-" || options.stdin_named {
         write!(w, " ")?;
         w.write_all(escaped_filename.as_bytes())?;
     }
@@ -287,8 +291,18 @@ where
 
         // Always compute the "binary" version of the digest, i.e. on Windows,
         // never handle CRLFs specifically.
-        let (digest_output, sz) = digest_reader(&mut digest, &mut file, ReadingMode::Binary)
-            .map_err_context(|| translate!("checksum-error-failed-to-read-input"))?;
+        // A file that cannot be read is reported by name, as GNU does, and the rest go on.
+        let (digest_output, sz) = match digest_reader(&mut digest, &mut file, ReadingMode::Binary) {
+            Ok(result) => result,
+            Err(err) => {
+                show!(err.map_err_context(|| if filename == "-" {
+                    "-".to_owned()
+                } else {
+                    locale_aware_shell_escape(Path::new(filename))
+                }));
+                continue;
+            }
+        };
 
         // Encodes the sum if df is Base64, leaves as-is otherwise.
         let encode_sum = |sum: DigestOutput, df: DigestFormat| {

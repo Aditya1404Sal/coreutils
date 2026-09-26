@@ -257,7 +257,20 @@ fn parse_unit(s: &str, opt: &'static str) -> std::result::Result<Unit, ParseErro
         "iec-i" => Ok(Unit::Iec(true)),
         "none" => Ok(Unit::None),
         value => Err(OptionValueError {
-            message: translate!("numfmt-error-invalid-unit-argument", "arg" => value, "opt" => format!("--{opt}")),
+            message: translate!(
+                "numfmt-error-invalid-unit-argument",
+                "arg" => value,
+                "opt" => format!("--{opt}"),
+                // GNU's list of the units this option takes, one per line.
+                "valid" => if opt == TO { &["none", "si", "iec", "iec-i"][..] } else { &["none", "auto", "si", "iec", "iec-i"][..] }
+                    .iter()
+                    .fold(String::new(), |mut list, unit| {
+                        list.push_str("\n  - ‘");
+                        list.push_str(unit);
+                        list.push('’');
+                        list
+                    })
+            ),
             option: opt,
             value: value.to_string(),
             // `auto` is a real unit, just not one --to can scale to.
@@ -528,9 +541,22 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         }
         // As for a format, a field list knows which of its ranges is at fault.
         Err(ParseError::Field(error)) => {
+            let fields = matches.get_one::<String>(FIELD).map_or("", String::as_str);
+            // GNU's wording for each way a field list can be wrong.
+            let message = match error.kind {
+                uucore::ranges::RangeErrorKind::NotANumber => translate!(
+                    "numfmt-error-field-not-a-number",
+                    "value" => fields.get(error.span.clone()).unwrap_or(fields)
+                ),
+                uucore::ranges::RangeErrorKind::ZeroBound => translate!("numfmt-error-field-zero"),
+                uucore::ranges::RangeErrorKind::Inverted => {
+                    translate!("numfmt-error-field-decreasing")
+                }
+                _ => error.message.clone(),
+            };
             return Err(uucore::diagnostics::error_after_report(
                 format_args.as_deref(),
-                NumfmtError::IllegalArgument(error.message.clone()),
+                NumfmtError::IllegalArgument(message),
                 |args, _| {
                     matches
                         .get_one::<String>(FIELD)

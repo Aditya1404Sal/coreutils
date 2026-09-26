@@ -25,6 +25,11 @@ pub struct InputOffset {
 }
 
 impl InputOffset {
+    /// The current position, skipped bytes included.
+    pub fn position(&self) -> u64 {
+        self.byte_pos
+    }
+
     /// creates a new `InputOffset` using the provided values.
     pub fn new(radix: Radix, byte_pos: u64, label: Option<u64>) -> Self {
         Self {

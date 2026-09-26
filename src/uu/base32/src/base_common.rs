@@ -55,7 +55,7 @@ impl Config {
                 if let Some(extra_op) = values.next() {
                     return Err(UUsageError::new(
                         BASE_CMD_PARSE_ERROR,
-                        translate!("base-common-extra-operand", "operand" => extra_op.quote()),
+                        translate!("base-common-extra-operand", "operand" => uucore::display::gnu_quote(extra_op.to_string_lossy())),
                     ));
                 }
 
@@ -659,6 +659,53 @@ pub mod fast_decode {
         Ok(())
     }
 
+    /// The digit worth zero and the bits each digit carries, for the formats whose last group
+    /// can be short: base64 (and base64url), base32 and base32hex.
+    fn short_group(codec: &dyn SupportsFastDecodeAndEncode) -> Option<(u8, usize)> {
+        let alphabet = codec.alphabet();
+        match codec.valid_decoding_multiple() {
+            4 if alphabet.contains(&b'A') => Some((b'A', 6)),
+            8 if alphabet.contains(&b'Z') => Some((b'A', 5)),
+            8 if alphabet.contains(&b'V') => Some((b'0', 5)),
+            _ => None,
+        }
+    }
+
+    /// Writes what GNU writes before it reports invalid input: the digits read up to the
+    /// first padding character, a short final group giving the whole bytes it holds. Then
+    /// fails with invalid input.
+    fn decode_prefix_then_fail(
+        buffer: &[u8],
+        codec: &dyn SupportsFastDecodeAndEncode,
+        decoded_buffer: &mut Vec<u8>,
+        output: &mut dyn Write,
+    ) -> UResult<()> {
+        let end = buffer
+            .iter()
+            .position(|&b| b == b'=')
+            .unwrap_or(buffer.len());
+        let multiple = codec.valid_decoding_multiple();
+        let full = end / multiple * multiple;
+        if full > 0 {
+            codec.decode_into_vec(&buffer[..full], decoded_buffer)?;
+        }
+        let tail = &buffer[full..end];
+        if let Some((zero, bits)) = short_group(codec)
+            && !tail.is_empty()
+        {
+            let mut group = tail.to_vec();
+            group.resize(multiple, zero);
+            let start = decoded_buffer.len();
+            if codec.decode_into_vec(&group, decoded_buffer).is_ok() {
+                decoded_buffer.truncate(start + tail.len() * bits / 8);
+            } else {
+                decoded_buffer.truncate(start);
+            }
+        }
+        write_to_output(decoded_buffer, output)?;
+        Err(USimpleError::new(1, "invalid input"))
+    }
+
     fn flush_ready_chunks(
         buffer: &mut Vec<u8>,
         block_limit: usize,
@@ -732,7 +779,12 @@ pub mod fast_decode {
             } else if ignore_garbage {
                 continue;
             } else {
-                return Err(USimpleError::new(1, "invalid input"));
+                return decode_prefix_then_fail(
+                    &buffer,
+                    supports_fast_decode_and_encode,
+                    &mut decoded_buffer,
+                    output,
+                );
             }
 
             if supports_partial_decode {
@@ -777,7 +829,18 @@ pub mod fast_decode {
 
             let final_chunk = owned_chunk.as_deref().unwrap_or(&buffer);
 
-            supports_fast_decode_and_encode.decode_into_vec(final_chunk, &mut decoded_buffer)?;
+            if supports_fast_decode_and_encode
+                .decode_into_vec(final_chunk, &mut decoded_buffer)
+                .is_err()
+            {
+                decoded_buffer.clear();
+                return decode_prefix_then_fail(
+                    &buffer,
+                    supports_fast_decode_and_encode,
+                    &mut decoded_buffer,
+                    output,
+                );
+            }
             write_to_output(&mut decoded_buffer, output)?;
 
             if had_invalid_tail {
@@ -826,27 +889,12 @@ pub mod fast_decode {
                 } else if ignore_garbage {
                     continue;
                 } else {
-                    if supports_partial_decode {
-                        flush_ready_chunks(
-                            &mut buffer,
-                            decode_in_chunks_of_size,
-                            valid_multiple,
-                            supports_fast_decode_and_encode,
-                            &mut decoded_buffer,
-                            output,
-                        )?;
-                    } else {
-                        while buffer.len() >= decode_in_chunks_of_size {
-                            decode_in_chunks_to_buffer(
-                                supports_fast_decode_and_encode,
-                                &buffer[..decode_in_chunks_of_size],
-                                &mut decoded_buffer,
-                            )?;
-                            write_to_output(&mut decoded_buffer, output)?;
-                            buffer.drain(..decode_in_chunks_of_size);
-                        }
-                    }
-                    return Err(USimpleError::new(1, "invalid input"));
+                    return decode_prefix_then_fail(
+                        &buffer,
+                        supports_fast_decode_and_encode,
+                        &mut decoded_buffer,
+                        output,
+                    );
                 }
 
                 if supports_partial_decode {
@@ -894,7 +942,18 @@ pub mod fast_decode {
 
             let final_chunk = owned_chunk.as_deref().unwrap_or(&buffer);
 
-            supports_fast_decode_and_encode.decode_into_vec(final_chunk, &mut decoded_buffer)?;
+            if supports_fast_decode_and_encode
+                .decode_into_vec(final_chunk, &mut decoded_buffer)
+                .is_err()
+            {
+                decoded_buffer.clear();
+                return decode_prefix_then_fail(
+                    &buffer,
+                    supports_fast_decode_and_encode,
+                    &mut decoded_buffer,
+                    output,
+                );
+            }
             write_to_output(&mut decoded_buffer, output)?;
 
             if had_invalid_tail {
