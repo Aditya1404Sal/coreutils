@@ -730,9 +730,12 @@ impl ParseSizeError {
         // stderr on macos (brew - GNU coreutils 8.32) also differs for the same version, e.g.:
         // ghead:   invalid number of bytes: '1Y': Value too large to be stored in data type
         // gtail:   invalid number of bytes: '1Y': Value too large to be stored in data type
+        //
+        // The system this build is measured against uses musl, whose strerror(EOVERFLOW) reads
+        // "Value too large for data type", quoting as GNU does in a UTF-8 locale.
         Self::SizeTooBig(format!(
-            "{}: Value too large for defined data type",
-            s.quote()
+            "{}: Value too large for data type",
+            crate::display::gnu_quote(s)
         ))
     }
 }
@@ -802,15 +805,15 @@ mod tests {
         ));
 
         assert_eq!(
-            ParseSizeError::SizeTooBig("'1Y': Value too large for defined data type".to_string()),
+            ParseSizeError::SizeTooBig("‘1Y’: Value too large for data type".to_string()),
             parse_size_u64("1Y").unwrap_err()
         );
         assert_eq!(
-            ParseSizeError::SizeTooBig("'1R': Value too large for defined data type".to_string()),
+            ParseSizeError::SizeTooBig("‘1R’: Value too large for data type".to_string()),
             parse_size_u64("1R").unwrap_err()
         );
         assert_eq!(
-            ParseSizeError::SizeTooBig("'1Q': Value too large for defined data type".to_string()),
+            ParseSizeError::SizeTooBig("‘1Q’: Value too large for data type".to_string()),
             parse_size_u64("1Q").unwrap_err()
         );
     }
