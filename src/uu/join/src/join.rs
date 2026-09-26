@@ -13,8 +13,6 @@ use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Split, Stdin, Write, stdin, stdout};
 use std::num::IntErrorKind;
-#[cfg(unix)]
-use std::os::unix::ffi::OsStrExt;
 use thiserror::Error;
 use uucore::diagnostics::OptionValue;
 use uucore::display::Quotable;
@@ -717,18 +715,19 @@ fn parse_separator(value_os: &OsString) -> UResult<SepSetting> {
         return Ok(SepSetting::Line);
     }
 
-    #[cfg(unix)]
+    // WASI's strings are bytes, as unix's are.
+    #[cfg(any(unix, target_os = "wasi"))]
     {
-        let value = value_os.as_bytes();
+        let value = value_os.as_encoded_bytes();
         if value.len() == 1 {
             return Ok(SepSetting::Byte(value[0]));
         }
     }
 
     let Some(value) = value_os.to_str() else {
-        #[cfg(unix)]
+        #[cfg(any(unix, target_os = "wasi"))]
         return Err(USimpleError::new(1, translate!("join-error-non-utf8-tab")));
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, target_os = "wasi")))]
         return Err(USimpleError::new(
             1,
             translate!("join-error-unprintable-separators"),
