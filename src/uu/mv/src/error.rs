@@ -21,10 +21,10 @@ pub enum MvError {
     DirectoryToNonDirectory(String, String),
     #[error("{}", translate!("mv-error-non-directory-to-directory", "source" => .0, "target" => .1))]
     NonDirectoryToDirectory(String, String),
-    #[error("{}", translate!("mv-error-not-directory", "path" => .0))]
-    NotADirectory(String),
-    #[error("{}", translate!("mv-error-target-not-directory", "path" => .0))]
-    TargetNotADirectory(String),
+    #[error("{}", translate!("mv-error-not-directory", "path" => .0, "error" => .1))]
+    NotADirectory(String, String),
+    #[error("{}", translate!("mv-error-target-not-directory", "path" => .0, "error" => .1))]
+    TargetNotADirectory(String, String),
     #[error("{}", translate!("mv-error-failed-access-not-directory", "path" => .0))]
     FailedToAccessNotADirectory(String),
 }

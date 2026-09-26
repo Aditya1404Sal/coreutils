@@ -178,6 +178,13 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         .cloned()
         .collect();
 
+    if files.is_empty() {
+        return Err(UUsageError::new(
+            1,
+            translate!("mv-error-missing-file-operand"),
+        ));
+    }
+
     if files.len() == 1 && !matches.contains_id(OPT_TARGET_DIRECTORY) {
         // GNU's own wording for this ("missing destination file operand after 'x'") does
         // not come from clap's generic argument-count machinery, so this builds it
@@ -214,7 +221,11 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     if let Some(ref maybe_dir) = target_dir
         && !Path::new(&maybe_dir).is_dir()
     {
-        return Err(MvError::TargetNotADirectory(maybe_dir.quote().to_string()).into());
+        return Err(MvError::TargetNotADirectory(
+            maybe_dir.quote().to_string(),
+            not_a_directory_reason(Path::new(&maybe_dir)),
+        )
+        .into());
     }
 
     // Handle -Z and --context options
@@ -342,7 +353,6 @@ pub fn uu_app() -> Command {
             Arg::new(ARG_FILES)
                 .action(ArgAction::Append)
                 .num_args(1..)
-                .required(true)
                 .value_parser(ValueParser::os_string())
                 .value_hint(clap::ValueHint::AnyPath),
         )
@@ -502,6 +512,10 @@ fn handle_two_paths(source: &Path, target: &Path, opts: &Options) -> UResult<()>
             hardlink_params.1,
         )
         .map_err(|e| -> Box<dyn UError> {
+            // A declined prompt fails quietly, as in GNU.
+            if e.to_string().is_empty() {
+                return uucore::error::ExitCode::new(1);
+            }
             let message = if is_directory_not_empty_error(&e) {
                 translate!(
                     "mv-error-cannot-overwrite-non-empty-directory",
@@ -516,6 +530,15 @@ fn handle_two_paths(source: &Path, target: &Path, opts: &Options) -> UResult<()>
             };
             e.map_err_context(|| message)
         })
+    }
+}
+
+/// Why `path` cannot hold the files moved into it, as GNU words it: the error from looking it
+/// up, or that it is not a directory.
+fn not_a_directory_reason(path: &Path) -> String {
+    match fs::metadata(path) {
+        Err(error) => uucore::error::strip_errno(&error),
+        Ok(_) => "Not a directory".to_owned(),
     }
 }
 
@@ -622,9 +645,9 @@ pub fn mv(files: &[OsString], opts: &Options) -> UResult<()> {
     let paths = parse_paths(files, opts);
 
     if opts.exchange {
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "wasi"))]
         return exchange_paths(&paths, opts);
-        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "wasi")))]
         return Err(USimpleError::new(
             1,
             translate!("mv-error-exchange-not-supported"),
@@ -646,7 +669,7 @@ pub fn mv(files: &[OsString], opts: &Options) -> UResult<()> {
 /// With more than two operands, the last operand must be a directory, and
 /// each of the other operands is exchanged with the file of the same name
 /// inside that directory (matching GNU `mv --exchange a b c dir/`).
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "wasi"))]
 fn exchange_paths(paths: &[PathBuf], opts: &Options) -> UResult<()> {
     match paths {
         [] | [_] => Err(UUsageError::new(
@@ -656,7 +679,11 @@ fn exchange_paths(paths: &[PathBuf], opts: &Options) -> UResult<()> {
         [from, to] => exchange_two_paths(from, to, opts),
         [sources @ .., target_dir] => {
             if !target_dir.is_dir() {
-                return Err(MvError::TargetNotADirectory(target_dir.quote().to_string()).into());
+                return Err(MvError::TargetNotADirectory(
+                    target_dir.quote().to_string(),
+                    not_a_directory_reason(target_dir),
+                )
+                .into());
             }
             for source in sources {
                 let name = source
@@ -667,6 +694,42 @@ fn exchange_paths(paths: &[PathBuf], opts: &Options) -> UResult<()> {
             Ok(())
         }
     }
+}
+
+/// Exchange the two given paths. WASI has no `RENAME_EXCHANGE`, so this is three renames
+/// through a free name beside `to`: the same result, though not atomic.
+#[cfg(target_os = "wasi")]
+fn exchange_two_paths(from: &Path, to: &Path, opts: &Options) -> UResult<()> {
+    let context =
+        || translate!("mv-error-cannot-move", "source" => from.quote(), "target" => to.quote());
+    let canonicalize_or_absolute = |p: &Path| {
+        canonicalize(absolute(p)?, MissingHandling::Normal, ResolveMode::Logical)
+            .or_else(|_| absolute(p))
+    };
+    if canonicalize_or_absolute(from)?.eq(&canonicalize_or_absolute(to)?) {
+        return Err(MvError::SameFile(from.quote().to_string(), to.quote().to_string()).into());
+    }
+    // Both must exist, as for RENAME_EXCHANGE.
+    from.symlink_metadata().map_err_context(context)?;
+    to.symlink_metadata().map_err_context(context)?;
+    let name = to.file_name().unwrap_or_default().to_string_lossy();
+    let spare = (0..u32::MAX)
+        .map(|n| to.with_file_name(format!(".{name}.exchange.{n}")))
+        .find(|candidate| candidate.symlink_metadata().is_err())
+        .unwrap_or_else(|| to.with_file_name(format!(".{name}.exchange")));
+    fs::rename(to, &spare).map_err_context(context)?;
+    if let Err(error) = fs::rename(from, to) {
+        let _ = fs::rename(&spare, to);
+        return Err(error.map_err_context(context));
+    }
+    fs::rename(&spare, from).map_err_context(context)?;
+    if opts.verbose {
+        println!(
+            "{}",
+            translate!("mv-verbose-exchanged", "from" => from.quote(), "to" => to.quote())
+        );
+    }
+    Ok(())
 }
 
 /// Atomically exchange the two given paths (renameat2 `RENAME_EXCHANGE`).
@@ -720,7 +783,11 @@ fn move_files_into_dir(files: &[PathBuf], target_dir: &Path, options: &Options) 
     };
 
     if !target_dir.is_dir() {
-        return Err(MvError::NotADirectory(target_dir.quote().to_string()).into());
+        return Err(MvError::NotADirectory(
+            target_dir.quote().to_string(),
+            not_a_directory_reason(target_dir),
+        )
+        .into());
     }
 
     let display_manager = options.progress_bar.then(MultiProgress::new);
@@ -776,6 +843,17 @@ fn move_files_into_dir(files: &[PathBuf], target_dir: &Path, options: &Options) 
         // And generate an error if this is the case
         if let Err(e) = assert_not_same_file(sourcepath, target_dir, true, options) {
             show!(e);
+            continue;
+        }
+
+        // GNU refuses to replace a directory with a file before trying to move.
+        if targetpath.symlink_metadata().is_ok_and(|m| m.is_dir())
+            && sourcepath.symlink_metadata().is_ok_and(|m| !m.is_dir())
+        {
+            show!(MvError::DirectoryToNonDirectory(
+                targetpath.quote().to_string(),
+                sourcepath.quote().to_string(),
+            ));
             continue;
         }
 

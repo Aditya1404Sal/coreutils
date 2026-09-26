@@ -23,8 +23,9 @@ mv-error-same-file = {$source} and {$target} are the same file
 mv-error-self-target-subdirectory = cannot move {$source} to a subdirectory of itself, {$target}
 mv-error-directory-to-non-directory = cannot overwrite directory {$path} with non-directory {$source}
 mv-error-non-directory-to-directory = cannot overwrite non-directory {$target} with directory {$source}
-mv-error-not-directory = target {$path}: Not a directory
-mv-error-target-not-directory = target directory {$path}: Not a directory
+mv-error-not-directory = target {$path}: {$error}
+mv-error-target-not-directory = target directory {$path}: {$error}
+mv-error-missing-file-operand = missing file operand
 mv-error-failed-access-not-directory = failed to access {$path}: Not a directory
 mv-error-backup-with-no-clobber = cannot combine --backup with -n/--no-clobber or --update=none-fail
 mv-error-extra-operand = mv: extra operand {$operand}
