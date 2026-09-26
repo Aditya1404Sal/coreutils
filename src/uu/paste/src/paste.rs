@@ -107,8 +107,16 @@ fn paste(
             )
         } else {
             let path = Path::new(&filename);
-            let file = File::open(path).map_err_context(|| path.to_string_lossy().into_owned())?;
-            InputSource::File(BufReader::new(file))
+            // GNU quotes only the empty name (`''`) -- an ordinary missing name (e.g.
+            // `/tmp/nosuch`) is reported bare, so this can't just be `path.quote()`.
+            let name = path.to_string_lossy().into_owned();
+            let quoted_name = if name.is_empty() {
+                "''".to_string()
+            } else {
+                name.clone()
+            };
+            let file = File::open(path).map_err_context(|| quoted_name)?;
+            InputSource::File(BufReader::new(file), name)
         };
 
         input_source_vec.push(input_source);
@@ -370,14 +378,17 @@ impl<'a> DelimiterState<'a> {
 }
 
 enum InputSource {
-    File(BufReader<File>),
+    // The name is kept alongside the reader so a read failure (e.g. a directory: opening one
+    // succeeds, only an actual read fails) can be reported by name, as GNU's own is -- an `?`
+    // on the bare `io::Error` gives no context at all.
+    File(BufReader<File>, String),
     StandardInput(Rc<RefCell<Stdin>>),
 }
 
 impl InputSource {
     fn read(&mut self, buf: &mut [u8]) -> UResult<usize> {
         let us = match self {
-            Self::File(bu) => bu.read(buf)?,
+            Self::File(bu, name) => bu.read(buf).map_err_context(|| name.clone())?,
             Self::StandardInput(rc) => rc
                 .try_borrow()
                 .map_err(|bo| {
@@ -392,7 +403,7 @@ impl InputSource {
 
     fn read_until(&mut self, byte: u8, buf: &mut Vec<u8>) -> UResult<usize> {
         let us = match self {
-            Self::File(bu) => bu.read_until(byte, buf)?,
+            Self::File(bu, name) => bu.read_until(byte, buf).map_err_context(|| name.clone())?,
             Self::StandardInput(rc) => rc
                 .try_borrow()
                 .map_err(|bo| {
