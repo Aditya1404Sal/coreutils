@@ -183,7 +183,11 @@ impl<'a> ErrorFormatter<'a> {
     /// generic one for every other utility this can happen to (`link`, confirmed; whatever
     /// else has a fixed- or minimum-count positional).
     fn print_too_few_operands(&self, last: Option<&str>, exit_code: i32) -> i32 {
-        if matches!(self.util_name, "cp" | "mv") {
+        if self.util_name == "ln" {
+            // ln takes no operand to be missing after: GNU asks for files.
+            self.print_gnu_usage_error("missing file operand");
+            exit_code
+        } else if matches!(self.util_name, "cp" | "mv") {
             self.print_missing_destination_operand(last, exit_code)
         } else {
             self.print_missing_operand(last, exit_code)
@@ -202,11 +206,85 @@ impl<'a> ErrorFormatter<'a> {
         exit_code
     }
 
+    /// A bad value for an option with a fixed set of values, as GNU's `argmatch` reports it:
+    /// `invalid argument 'x' for '--opt'` (or `ambiguous argument` for a prefix of several),
+    /// then every valid value, synonyms on one line, then where to read more. A missing value
+    /// is getopt's `option '--opt' requires an argument`, or `option requires an argument --
+    /// 'o'` when the short form was typed. `None` when the option takes free-form values.
+    fn print_gnu_invalid_value(
+        &self,
+        cmd: &Command,
+        err: &Error,
+        last: Option<&str>,
+        exit_code: i32,
+    ) -> Option<i32> {
+        let flag = err.get(ContextKind::InvalidArg)?.to_string();
+        let flag = flag.split([' ', '=', '[']).next()?;
+        let value = err.get(ContextKind::InvalidValue)?.to_string();
+        let arg = cmd.get_arguments().find(|arg| {
+            arg.get_long()
+                .is_some_and(|long| flag.strip_prefix("--") == Some(long))
+                || arg.get_short().is_some_and(|short| {
+                    flag.strip_prefix('-')
+                        .is_some_and(|rest| rest.chars().eq(std::iter::once(short)))
+                })
+        })?;
+        if value.is_empty() {
+            let message = match (arg.get_long(), arg.get_short()) {
+                (Some(long), _) if last.is_some_and(|last| last.starts_with("--")) => {
+                    format!("option '--{long}' requires an argument")
+                }
+                (_, Some(short)) => format!("option requires an argument -- '{short}'"),
+                (Some(long), None) => format!("option '--{long}' requires an argument"),
+                (None, None) => return None,
+            };
+            self.print_gnu_usage_error(&message);
+            return Some(exit_code);
+        }
+        let values: Vec<_> = arg
+            .get_possible_values()
+            .into_iter()
+            .filter(|value| !value.is_hide_set())
+            .collect();
+        if values.is_empty() {
+            return None;
+        }
+        let name = match (arg.get_long(), arg.get_short()) {
+            (Some(long), _) => format!("--{long}"),
+            (None, Some(short)) => format!("-{short}"),
+            (None, None) => return None,
+        };
+        let kind = if err.get(ContextKind::Suggested).is_some() {
+            "ambiguous"
+        } else {
+            "invalid"
+        };
+        let mut message = format!(
+            "{kind} argument {} for {}\nValid arguments are:",
+            crate::display::gnu_quote(&value),
+            crate::display::gnu_quote(&name)
+        );
+        for value in values {
+            let names: Vec<String> = value
+                .get_name_and_aliases()
+                .map(crate::display::gnu_quote)
+                .collect();
+            message.push_str("\n  - ");
+            message.push_str(&names.join(", "));
+        }
+        self.print_gnu_usage_error(&message);
+        Some(if exit_code < 125 { 1 } else { exit_code })
+    }
+
     /// An unknown option, as GNU reports it: `invalid option -- 'x'` for a letter,
-    /// `unrecognized option '--xyz'` for a long option.
+    /// `unrecognized option '--xyz'` for a long option; an operand where none is taken is an
+    /// `extra operand 'x'`.
     fn handle_unknown_argument(&self, err: &Error, exit_code: i32) -> i32 {
         if let Some(invalid_arg) = err.get(ContextKind::InvalidArg) {
             let arg = invalid_arg.to_string();
+            if arg == "-" || !arg.starts_with('-') {
+                return self.print_extra_operand(Some(&arg), exit_code);
+            }
             if arg.starts_with("--") {
                 self.print_gnu_usage_error(&format!("unrecognized option '{arg}'"));
                 return exit_code;
@@ -565,12 +643,17 @@ where
                 .collect()
         })
         .unwrap_or_default();
+    // Kept to look up an option's valid values (with their synonyms) for a GNU-worded error.
+    let reference = cmd.clone();
     cmd.try_get_matches_from(args).map_err(|e| {
         if e.exit_code() == 0 {
             e.into() // Preserve help/version
         } else {
             let formatter = ErrorFormatter::new(crate::util_name());
             let code = match e.kind() {
+                ErrorKind::InvalidValue => formatter
+                    .print_gnu_invalid_value(&reference, &e, last.as_deref(), exit_code)
+                    .unwrap_or_else(|| formatter.print_error(&e, exit_code)),
                 ErrorKind::MissingRequiredArgument | ErrorKind::TooFewValues => {
                     formatter.print_too_few_operands(last.as_deref(), exit_code)
                 }
