@@ -106,14 +106,22 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     };
     let (relative_to, relative_base) = prepare_relative_options(&matches, can_mode, resolve_mode)?;
     for path in &paths {
-        let result = resolve_path(
-            path,
-            line_ending,
-            resolve_mode,
-            can_mode,
-            relative_to.as_deref(),
-            relative_base.as_deref(),
-        );
+        // An empty name names no file, as GNU reports it.
+        let result = if path.as_os_str().is_empty() {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "No such file or directory",
+            ))
+        } else {
+            resolve_path(
+                path,
+                line_ending,
+                resolve_mode,
+                can_mode,
+                relative_to.as_deref(),
+                relative_base.as_deref(),
+            )
+        };
         if let Err(e) = result.map_err_context(|| path.maybe_quote().to_string()) {
             if quiet {
                 set_exit_code(e.code());
@@ -214,7 +222,7 @@ pub fn uu_app() -> Command {
             Arg::new(ARG_FILES)
                 .action(ArgAction::Append)
                 .required(true)
-                .value_parser(NonEmptyOsStringParser)
+                .value_parser(clap::value_parser!(OsString))
                 .value_hint(clap::ValueHint::AnyPath),
         )
 }
