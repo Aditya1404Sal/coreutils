@@ -184,7 +184,10 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
             ErrorKind::TooFewValues,
             translate!("mv-error-insufficient-arguments", "arg_files" => ARG_FILES),
         );
-        uucore::clap_localization::handle_clap_error_with_exit_code(err, 1);
+        // Report and return rather than exit: an embedding host runs uumain in-process.
+        let formatter = uucore::clap_localization::ErrorFormatter::new(uucore::util_name());
+        let code = formatter.print_error(&err, 1);
+        return Err(USimpleError::new(code, ""));
     }
 
     let overwrite_mode = determine_overwrite_mode(&matches);

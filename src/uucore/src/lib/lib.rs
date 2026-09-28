@@ -382,13 +382,30 @@ pub fn set_utility_is_second_arg() {
 // So if we want only the first arg or so it's overkill. We cache it.
 #[cfg(windows)]
 static ARGV: LazyLock<Vec<OsString>> = LazyLock::new(|| wild::args_os().collect());
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "wasi")))]
 static ARGV: LazyLock<Vec<OsString>> = LazyLock::new(|| std::env::args_os().collect());
+// On wasip2, `std::env::args_os()` can be empty when the guest is not run as a CLI command
+// (e.g. embedded as a library or invoked as a Golem agent method, where the host supplies no
+// argv). `UTIL_NAME`/`EXECUTION_PHRASE` and callers index `ARGV[0]`, which panics (aborts the
+// component) on an empty vec. Guarantee at least one element so those globals resolve to a
+// stable fallback name instead of trapping.
+#[cfg(all(not(windows), target_os = "wasi"))]
+static ARGV: LazyLock<Vec<OsString>> = LazyLock::new(|| {
+    let argv: Vec<OsString> = std::env::args_os().collect();
+    if argv.is_empty() {
+        vec![OsString::from("uu")]
+    } else {
+        argv
+    }
+});
 
 static UTIL_NAME: LazyLock<String> = LazyLock::new(|| {
-    let base_index = usize::from(get_utility_is_second_arg());
+    // Clamp every index into `ARGV`: on wasip2 the vec may be shorter than the multicall layout
+    // assumes (see the ARGV comment above), and an out-of-bounds index aborts the component.
+    let last = ARGV.len().saturating_sub(1);
+    let base_index = usize::from(get_utility_is_second_arg()).min(last);
     let is_man = usize::from(ARGV[base_index].eq("manpage"));
-    let argv_index = base_index + is_man;
+    let argv_index = (base_index + is_man).min(last);
 
     // Strip directory path to show only utility name
     // (e.g., "mkdir" instead of "./target/debug/mkdir")
@@ -400,9 +417,31 @@ static UTIL_NAME: LazyLock<String> = LazyLock::new(|| {
         .into_owned()
 });
 
+thread_local! {
+    /// The utility an embedder is running on this thread; see [`set_embedded_util`].
+    static EMBEDDED_UTIL: std::cell::Cell<Option<&'static str>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Run `name` in-process: for a host, such as a shell, that calls several utilities' `uumain`
+/// one after another on the same thread instead of running each as its own process.
+///
+/// There `argv[0]` names the host, not the utility, and the localization a utility's `main`
+/// sets up never runs. After this call [`util_name`] and [`execution_phrase`] report `name`,
+/// and the thread's localizer holds `name`'s strings, replacing the previous utility's.
+pub fn set_embedded_util(name: &'static str) {
+    EMBEDDED_UTIL.with(|util| util.set(Some(name)));
+    let _ = locale::setup_localization(name);
+}
+
+/// The utility set by [`set_embedded_util`] on this thread, if any.
+pub(crate) fn embedded_util() -> Option<&'static str> {
+    EMBEDDED_UTIL.with(std::cell::Cell::get)
+}
+
 /// Derive the utility name.
 pub fn util_name() -> &'static str {
-    &UTIL_NAME
+    embedded_util().unwrap_or_else(|| UTIL_NAME.as_str())
 }
 
 static EXECUTION_PHRASE: LazyLock<String> = LazyLock::new(|| {
@@ -419,7 +458,7 @@ static EXECUTION_PHRASE: LazyLock<String> = LazyLock::new(|| {
 
 /// Derive the complete execution phrase for "usage".
 pub fn execution_phrase() -> &'static str {
-    &EXECUTION_PHRASE
+    embedded_util().unwrap_or_else(|| EXECUTION_PHRASE.as_str())
 }
 
 /// Args contains arguments passed to the utility.

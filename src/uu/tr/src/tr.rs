@@ -4,14 +4,15 @@
 // file that was distributed with this source code.
 
 mod diagnostics;
-mod operation;
+/// Stateful byte transformations for embedders that own their input/output streams.
+pub mod operation;
 mod simd;
 mod unicode_table;
 
-use clap::{Arg, ArgAction, Command, value_parser};
+use clap::{Arg, ArgAction, ArgMatches, Command, value_parser};
 use operation::{
-    DeleteOperation, Sequence, SqueezeOperation, SymbolTranslator, TranslateOperation,
-    flush_output, translate_input,
+    ChainedSymbolTranslator, DeleteOperation, Sequence, SqueezeOperation, SymbolTranslator,
+    TranslateOperation, flush_output, translate_input,
 };
 use simd::process_input;
 use std::ffi::OsString;
@@ -36,7 +37,49 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     // Kept for the caret in set diagnostics, which needs the sets as typed.
     let set_args = uucore::diagnostics::capture(&args);
     let matches = uucore::clap_localization::handle_clap_result(uu_app(), args)?;
+    let operation = parse_operation(&matches, set_args.as_deref())?;
 
+    let stdin = stdin();
+    let mut locked_stdin = stdin.lock();
+    let mut locked_stdout = stdout().lock();
+
+    if is_stdin_directory(&stdin) {
+        return Err(USimpleError::new(1, translate!("tr-error-read-directory")));
+    }
+
+    match operation {
+        ParsedOperation::Delete(op) => process_input(&mut locked_stdin, &mut locked_stdout, &op)?,
+        ParsedOperation::DeleteSqueeze(op) => {
+            translate_input(&mut locked_stdin, &mut locked_stdout, op)?;
+        }
+        ParsedOperation::TranslateSqueeze(op) => {
+            translate_input(&mut locked_stdin, &mut locked_stdout, op)?;
+        }
+        ParsedOperation::Squeeze(op) => translate_input(&mut locked_stdin, &mut locked_stdout, op)?,
+        ParsedOperation::Translate(op) => {
+            process_input(&mut locked_stdin, &mut locked_stdout, &op)?;
+        }
+    }
+
+    flush_output(&mut locked_stdout)?;
+
+    Ok(())
+}
+
+/// The operations selected by the command-line options, in application order.
+enum ParsedOperation {
+    Delete(DeleteOperation),
+    DeleteSqueeze(ChainedSymbolTranslator<DeleteOperation, SqueezeOperation>),
+    Squeeze(SqueezeOperation),
+    TranslateSqueeze(ChainedSymbolTranslator<TranslateOperation, SqueezeOperation>),
+    Translate(TranslateOperation),
+}
+
+/// Validates the options and solves the sets. `set_args` enables caret diagnostics.
+fn parse_operation(
+    matches: &ArgMatches,
+    set_args: Option<&[OsString]>,
+) -> UResult<ParsedOperation> {
     let delete_flag = matches.get_flag(options::DELETE);
     let complement_flag = matches.get_flag(options::COMPLEMENT);
     let squeeze_flag = matches.get_flag(options::SQUEEZE);
@@ -95,10 +138,6 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         }
     }
 
-    let stdin = stdin();
-    let mut locked_stdin = stdin.lock();
-    let mut locked_stdout = stdout().lock();
-
     // According to the man page: translating only happens if deleting or if a second set is given
     let translating = !delete_flag && sets.len() > 1;
     let mut sets_iter = sets.iter().map(OsString::as_os_str);
@@ -114,46 +153,49 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         Ok(sets_solved) => sets_solved,
         Err(error) => {
             return Err(uucore::diagnostics::error_after_report(
-                set_args.as_deref(),
+                set_args,
                 error,
                 |args, error| diagnostics::render(args, &sets, error),
             ));
         }
     };
 
-    if is_stdin_directory(&stdin) {
-        return Err(USimpleError::new(1, translate!("tr-error-read-directory")));
-    }
-
-    // '*_op' are the operations that need to be applied, in order.
-    if delete_flag {
+    Ok(if delete_flag {
         if squeeze_flag {
-            let delete_op = DeleteOperation::new(set1);
-            let squeeze_op = SqueezeOperation::new(set2);
-            let op = delete_op.chain(squeeze_op);
-            translate_input(&mut locked_stdin, &mut locked_stdout, op)?;
+            ParsedOperation::DeleteSqueeze(
+                DeleteOperation::new(set1).chain(SqueezeOperation::new(set2)),
+            )
         } else {
-            let op = DeleteOperation::new(set1);
-            process_input(&mut locked_stdin, &mut locked_stdout, &op)?;
+            ParsedOperation::Delete(DeleteOperation::new(set1))
         }
     } else if squeeze_flag {
         if sets_len == 1 {
-            let op = SqueezeOperation::new(set1);
-            translate_input(&mut locked_stdin, &mut locked_stdout, op)?;
+            ParsedOperation::Squeeze(SqueezeOperation::new(set1))
         } else {
-            let translate_op = TranslateOperation::new(set1, set2.clone())?;
-            let squeeze_op = SqueezeOperation::new(set2);
-            let op = translate_op.chain(squeeze_op);
-            translate_input(&mut locked_stdin, &mut locked_stdout, op)?;
+            ParsedOperation::TranslateSqueeze(
+                TranslateOperation::new(set1, set2.clone())?.chain(SqueezeOperation::new(set2)),
+            )
         }
     } else {
-        let op = TranslateOperation::new(set1, set2)?;
-        process_input(&mut locked_stdin, &mut locked_stdout, &op)?;
-    }
+        ParsedOperation::Translate(TranslateOperation::new(set1, set2)?)
+    })
+}
 
-    flush_output(&mut locked_stdout)?;
-
-    Ok(())
+/// Parse the original command options into a stateful byte translator.
+///
+/// Embedders can incrementally feed bytes without rebinding process input/output.
+/// Diagnostics use the same uucore error handling as the standalone command.
+pub fn translator(args: impl uucore::Args) -> UResult<Box<dyn SymbolTranslator + Send>> {
+    let args: Vec<OsString> = args.collect();
+    let set_args = uucore::diagnostics::capture(&args);
+    let matches = uucore::clap_localization::handle_clap_result(uu_app(), args)?;
+    Ok(match parse_operation(&matches, set_args.as_deref())? {
+        ParsedOperation::Delete(op) => Box::new(op),
+        ParsedOperation::DeleteSqueeze(op) => Box::new(op),
+        ParsedOperation::TranslateSqueeze(op) => Box::new(op),
+        ParsedOperation::Squeeze(op) => Box::new(op),
+        ParsedOperation::Translate(op) => Box::new(op),
+    })
 }
 
 pub fn uu_app() -> Command {

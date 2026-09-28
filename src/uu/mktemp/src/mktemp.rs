@@ -384,10 +384,14 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     let args: Vec<_> = args.collect();
     let matches = uu_app().try_get_matches_from(&args).map_err(|e| {
         use clap::error::{ContextKind, ContextValue, ErrorKind};
-        use uucore::clap_localization::handle_clap_error_with_exit_code;
+        use uucore::clap_localization::ErrorFormatter;
 
         match e.kind() {
-            ErrorKind::UnknownArgument => handle_clap_error_with_exit_code(e, 1),
+            // Report and return rather than exit: an embedding host runs uumain in-process.
+            ErrorKind::UnknownArgument => {
+                let code = ErrorFormatter::new(uucore::util_name()).print_error(&e, 1);
+                uucore::error::USimpleError::new(code, "")
+            }
             ErrorKind::TooManyValues
                 if e.context().any(|(k, v)| {
                     k == ContextKind::InvalidArg && v == &ContextValue::String("[template]".into())

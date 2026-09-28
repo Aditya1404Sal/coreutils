@@ -10,11 +10,12 @@ use crate::error::UError;
 use fluent::{FluentArgs, FluentBundle, FluentResource};
 use fluent_syntax::parser::ParserError;
 
-use std::cell::Cell;
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 use os_display::Quotable;
 use thiserror::Error;
@@ -184,7 +185,6 @@ fn build_errors_bundle_with(
 // Cache localizer. FluentResource cannot be shared between threads while FluentBundle can be shared
 static UUCORE_FLUENT: OnceLock<FluentResource> = OnceLock::new();
 static CHECKSUM_FLUENT: OnceLock<FluentResource> = OnceLock::new();
-static UTIL_FLUENT: OnceLock<FluentResource> = OnceLock::new();
 thread_local! {
     #[cfg_attr(
         any(
@@ -200,7 +200,8 @@ thread_local! {
             reason = "https://github.com/rust-lang/rust-clippy/issues/13422"
         )
     )]
-    static LOCALIZER: OnceLock<Localizer> = const { OnceLock::new() };
+    /// Replaced, not only set, when an embedder switches utilities (`crate::set_embedded_util`).
+    static LOCALIZER: RefCell<OnceLock<Localizer>> = const { RefCell::new(OnceLock::new()) };
     /// Built on the first lookup that misses every ordinary bundle; `None`
     /// when there are no error strings to be found at all.
     #[cfg_attr(
@@ -260,15 +261,21 @@ fn create_bundle(
     bundle.set_use_isolating(false);
 
     let mut try_add_resource_from = |dir_opt: Option<PathBuf>| -> bool {
-        if let Some(resource) = dir_opt
+        let resource = dir_opt
             .map(|dir| dir.join(format!("{locale}.ftl")))
-            .and_then(|locale_path| fs::read_to_string(locale_path).ok())
-            // On parse errors, use the partial resource which contains all
-            // successfully parsed messages
-            .map(|ftl| FluentResource::try_new(ftl).unwrap_or_else(|(partial, _)| partial))
-        {
-            // use Box::leak to provide 'static lifetime for shared FluentBundle between threads
-            bundle.add_resource_overriding(Box::leak(Box::new(resource)));
+            .and_then(|locale_path| {
+                static_resource(&locale_path.to_string_lossy(), || {
+                    fs::read_to_string(&locale_path)
+                        // On parse errors, use the partial resource which contains all
+                        // successfully parsed messages
+                        .map(|ftl| {
+                            FluentResource::try_new(ftl).unwrap_or_else(|(partial, _)| partial)
+                        })
+                })
+                .ok()
+            });
+        if let Some(resource) = resource {
+            bundle.add_resource_overriding(resource);
             true
         } else {
             false
@@ -341,7 +348,8 @@ fn init_localization(
     };
 
     LOCALIZER.with(|lock| {
-        lock.set(loc)
+        lock.borrow()
+            .set(loc)
             .map_err(|_| LocalizationError::Bundle("Localizer already initialized".into()))
     })?;
     Ok(())
@@ -388,6 +396,31 @@ fn parse_fluent_resource(
     }
 }
 
+/// The resource parsed from the locale file `key`, parsed once and kept for the rest of the
+/// process.
+///
+/// Bundles borrow their resources for `'static`. A host that switches utilities
+/// (`crate::set_embedded_util`) builds a bundle on every switch, so leaking a fresh parse each
+/// time would grow without bound; caching by file bounds it to one parse per file.
+fn static_resource<E>(
+    key: &str,
+    parse: impl FnOnce() -> Result<FluentResource, E>,
+) -> Result<&'static FluentResource, E> {
+    static RESOURCES: Mutex<BTreeMap<String, &'static FluentResource>> =
+        Mutex::new(BTreeMap::new());
+    // global cache breaks unit tests
+    if cfg!(test) {
+        return parse().map(|resource| &*Box::leak(Box::new(resource)));
+    }
+    let mut resources = RESOURCES.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(resource) = resources.get(key) {
+        return Ok(resource);
+    }
+    let resource: &'static FluentResource = Box::leak(Box::new(parse()?));
+    resources.insert(key.to_owned(), resource);
+    Ok(resource)
+}
+
 /// Create a bundle from embedded English locale files with common uucore strings
 fn create_english_bundle_from_embedded(
     locale: &LanguageIdentifier,
@@ -420,7 +453,7 @@ fn create_english_bundle_from_embedded(
     // Then, try to load utility-specific strings
     let locale_key = format!("{util_name}/en-US.ftl");
     if let Some(ftl_content) = get_embedded_locale(&locale_key) {
-        let resource = parse_fluent_resource(ftl_content, &UTIL_FLUENT)?;
+        let resource = static_resource(&locale_key, || parse_fluent_resource_owned(ftl_content))?;
         bundle.add_resource_overriding(resource);
     }
 
@@ -437,8 +470,8 @@ fn create_english_bundle_from_embedded(
 }
 
 /// Create a bundle from embedded locale files for any locale on WASI.
-/// Bypasses the global OnceLock cache (uses Box::leak) so it can be
-/// called for multiple locales in the same process.
+/// Caches by file (see [`static_resource`]) rather than in one `OnceLock`
+/// so it can be called for multiple locales in the same process.
 #[cfg(target_os = "wasi")]
 fn create_wasi_bundle_from_embedded(
     locale: &LanguageIdentifier,
@@ -450,9 +483,11 @@ fn create_wasi_bundle_from_embedded(
 
     let mut try_add = |key: &str| {
         if let Some(content) = get_embedded_locale(key)
-            && let Ok(resource) = FluentResource::try_new(content.to_string())
+            && let Ok(resource) = static_resource(key, || {
+                FluentResource::try_new(content.to_string()).map_err(drop)
+            })
         {
-            bundle.add_resource_overriding(Box::leak(Box::new(resource)));
+            bundle.add_resource_overriding(resource);
         }
     };
 
@@ -473,7 +508,8 @@ fn create_wasi_bundle_from_embedded(
 
 fn get_message_internal(id: &str, args: Option<FluentArgs>) -> String {
     LOCALIZER.with(|lock| {
-        lock.get()
+        lock.borrow()
+            .get()
             .map_or_else(|| id.to_string(), |loc| loc.format(id, args.as_ref())) // Return the key ID if localizer not initialized
     })
 }
@@ -627,11 +663,21 @@ pub fn setup_localization(p: &str) -> Result<(), LocalizationError> {
                 reason = "https://github.com/rust-lang/rust-clippy/issues/13422"
             )
         )]
-        static LOCALIZER_IS_SET: Cell<bool> = const { Cell::new(false) };
+        static LOCALIZED_UTIL: RefCell<Option<String>> = const { RefCell::new(None) };
     }
-    if LOCALIZER_IS_SET.with(Cell::get) {
+    // The first setup stands for the life of the thread, unless an embedder has since switched
+    // utilities (`crate::set_embedded_util`): then the localizer is rebuilt for the new one.
+    let embedded = crate::embedded_util();
+    let p = embedded.unwrap_or(p);
+    let settled = LOCALIZED_UTIL.with(|util| {
+        util.borrow()
+            .as_deref()
+            .is_some_and(|current| embedded.is_none() || current == p)
+    });
+    if settled {
         return Ok(());
     }
+    LOCALIZER.with(|lock| lock.replace(OnceLock::new()));
 
     let locale = detect_system_locale().unwrap_or_else(|_| {
         LanguageIdentifier::from_str(DEFAULT_LOCALE).expect("Default locale should always be valid")
@@ -665,11 +711,12 @@ pub fn setup_localization(p: &str) -> Result<(), LocalizationError> {
         };
 
         LOCALIZER.with(|lock| {
-            lock.set(localizer)
+            lock.borrow()
+                .set(localizer)
                 .map_err(|_| LocalizationError::Bundle("Localizer already initialized".into()))
         })?;
     }
-    LOCALIZER_IS_SET.with(|f| f.set(true));
+    LOCALIZED_UTIL.with(|util| *util.borrow_mut() = Some(p.to_owned()));
     Ok(())
 }
 
@@ -959,7 +1006,8 @@ mod tests {
         };
 
         LOCALIZER.with(|lock| {
-            lock.set(loc)
+            lock.borrow()
+                .set(loc)
                 .map_err(|_| LocalizationError::Bundle("Localizer already initialized".into()))
         })?;
         Ok(())
@@ -1371,6 +1419,30 @@ invalid-syntax = This is { $missing
             args2.set("count", 5);
             let message2 = get_message_with_args("count-items", args2);
             assert_eq!(message2, "You have 5 items");
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn embedded_util_switch_replaces_the_localizer() {
+        std::thread::spawn(|| {
+            crate::set_embedded_util("ls");
+            assert_eq!(crate::util_name(), "ls");
+            assert_eq!(crate::execution_phrase(), "ls");
+            // Other tests set LANG concurrently, so check only that the key was found.
+            assert_ne!(get_message("ls-about"), "ls-about");
+
+            crate::set_embedded_util("cat");
+            assert_eq!(crate::util_name(), "cat");
+            assert_ne!(get_message("cat-about"), "cat-about");
+            // The previous utility's strings are gone, and common ones remain.
+            assert_eq!(get_message("ls-about"), "ls-about");
+            assert_ne!(get_message("common-usage"), "common-usage");
+
+            // Setup from a clap help template names the running utility, not a stale one.
+            setup_localization("ls").unwrap();
+            assert_eq!(get_message("ls-about"), "ls-about");
         })
         .join()
         .unwrap();
