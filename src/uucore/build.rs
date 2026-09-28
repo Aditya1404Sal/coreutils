@@ -412,8 +412,10 @@ where
 {
     let en_path = path_builder("en-US");
     if let Some(locale_dir) = en_path.parent().filter(|l| l.exists()) {
-        for entry in std::fs::read_dir(locale_dir)? {
-            let entry = entry?;
+        // Sorted, so the embedded table does not follow the filesystem's listing order.
+        let mut entries = std::fs::read_dir(locale_dir)?.collect::<Result<Vec<_>, _>>()?;
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
             let path = entry.path();
             if path.extension().is_some_and(|e| e == "ftl")
                 && let Some(locale) = path.file_stem().and_then(|s| s.to_str())

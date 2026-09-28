@@ -340,6 +340,14 @@ pub fn canonicalize<P: AsRef<Path>>(
 ) -> IOResult<PathBuf> {
     const SYMLINKS_TO_LOOK_FOR_LOOPS: i32 = 20;
     let original = original.as_ref();
+    // POSIX/GNU realpath(3) rejects an empty path outright (ENOENT), in every mode -- even
+    // `-m`/`MissingHandling::Missing`, which otherwise tolerates a nonexistent path. Left
+    // unchecked, `original.is_absolute()` below is false for "", so an empty path falls
+    // into the relative-path branch and resolves to the current directory itself (`readlink
+    // -f ''` printed `/` instead of erroring; confirmed against the oracle).
+    if original.as_os_str().is_empty() {
+        return Err(Error::from(ErrorKind::NotFound));
+    }
     let has_to_be_directory =
         (miss_mode == MissingHandling::Normal || miss_mode == MissingHandling::Existing) && {
             let path_str = original.to_string_lossy();
@@ -431,27 +439,25 @@ pub fn canonicalize<P: AsRef<Path>>(
 }
 
 #[cfg(not(unix))]
-/// Display the permissions of a file
+/// Display the permissions of a file.
+///
+/// This target has no `chmod` (see the tool's `unsupported` refusal for it) and no varying
+/// umask, so every file's mode is exactly the type's GNU default and never anything else:
+/// `755` for a directory, `644` for a regular file, and `777` for a symlink (Linux ignores a
+/// symlink's own permission bits and always reports them as `rwxrwxrwx`). Reporting those
+/// real values beats the placeholder this used to print unconditionally for every file --
+/// `r-xr-xr-x`, even for a plain file GNU shows as `-rw-r--r--`, and even '`d`'-less for a
+/// directory GNU shows as `drwxr-xr-x`.
 pub fn display_permissions(metadata: &fs::Metadata, display_file_type: bool) -> String {
-    let write = if metadata.permissions().readonly() {
-        '-'
+    use mode::{S_IFDIR, S_IFLNK, S_IFREG};
+    let mode = if metadata.is_symlink() {
+        S_IFLNK | 0o777
+    } else if metadata.is_dir() {
+        S_IFDIR | 0o755
     } else {
-        'w'
+        S_IFREG | 0o644
     };
-
-    if display_file_type {
-        let file_type = if metadata.is_symlink() {
-            'l'
-        } else if metadata.is_dir() {
-            'd'
-        } else {
-            '-'
-        };
-
-        format!("{file_type}r{write}xr{write}xr{write}x")
-    } else {
-        format!("r{write}xr{write}xr{write}x")
-    }
+    display_permissions_unix(mode, display_file_type)
 }
 
 #[cfg(unix)]
