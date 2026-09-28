@@ -1120,7 +1120,12 @@ impl Options {
         if let Some(dir) = &target_dir
             && !dir.is_dir()
         {
-            return Err(CpError::NotADirectory(dir.clone()));
+            return Err(translate!(
+                "cp-error-target-directory",
+                "target" => dir.quote(),
+                "error" => not_a_directory_reason(dir)
+            )
+            .into());
         }
         // cp follows POSIX conventions for overriding options such as "-a",
         // "-d", "--preserve", and "--no-preserve": the last flag on the
@@ -1561,7 +1566,7 @@ fn construct_dest_path(
     if options.no_target_dir && target.is_dir() {
         return Err(
             translate!("cp-error-cannot-overwrite-directory-with-non-directory",
-                              "dir" => target.quote())
+                              "dir" => target.quote(), "source" => source_path.quote())
             .into(),
         );
     }
@@ -1767,6 +1772,36 @@ fn source_times(source_metadata: &Metadata, context: &str) -> CopyResult<(FileTi
             FileTime::from_last_modification_time(source_metadata),
         ))
     }
+}
+
+/// Sets `path`'s access and modification times by path, not following a final symlink when
+/// `nofollow` is set.
+///
+/// On WASI `filetime` cannot set a symlink's times at all, and sets a file's through a descriptor
+/// it opens; when that descriptor names a directory, a Linux host refuses it new times (EBADF).
+/// `utimensat` on the path, as touch uses, sets both.
+#[cfg(target_os = "wasi")]
+fn set_times_by_path(
+    path: &Path,
+    atime: FileTime,
+    mtime: FileTime,
+    nofollow: bool,
+) -> io::Result<()> {
+    use rustix::fs::{AtFlags, CWD, Timespec, Timestamps, utimensat};
+    let timespec = |time: FileTime| Timespec {
+        tv_sec: time.unix_seconds(),
+        tv_nsec: time.nanoseconds() as _,
+    };
+    let timestamps = Timestamps {
+        last_access: timespec(atime),
+        last_modification: timespec(mtime),
+    };
+    let flags = if nofollow {
+        AtFlags::SYMLINK_NOFOLLOW
+    } else {
+        AtFlags::empty()
+    };
+    utimensat(CWD, path, &timestamps, flags).map_err(io::Error::from)
 }
 
 fn handle_preserve<F: Fn() -> CopyResult<()>>(p: Preserve, f: F) -> CopyResult<()> {
@@ -2017,6 +2052,15 @@ pub(crate) fn copy_attributes(
         };
         #[cfg(not(unix))]
         let no_open = dest.is_symlink();
+        // Other files keep the descriptor, through which the embedding shell refuses given
+        // times to a device, as a host does to a user who does not own it.
+        #[cfg(target_os = "wasi")]
+        if no_open || dest.is_dir() {
+            set_times_by_path(dest, atime, mtime, no_open)?;
+        } else {
+            filetime::set_file_times(dest, atime, mtime)?;
+        }
+        #[cfg(not(target_os = "wasi"))]
         if no_open {
             filetime::set_symlink_file_times(dest, atime, mtime)?;
         } else {
@@ -2166,6 +2210,20 @@ fn paths_are_same_entry(source: &Path, dest: &Path) -> bool {
         .is_some_and(|(s, d)| s == d)
 }
 
+/// Like [`paths_refer_to_same_file`], but also catches same-file-through-a-symlink cases that
+/// stat-identity alone misses on this target: on wasm32-wasip2, `FileInformation` (`rustix`'s
+/// `stat`/`lstat`) does not reliably resolve a *symlink* to the same identity as the file it
+/// points to (two hardlinks to one file, with no symlink involved, compare equal correctly --
+/// this is specifically about a symlink in the comparison), so `cp f l` for `l -> f` was not
+/// recognized as the same file at all: it silently truncated `f` while "copying" it onto
+/// itself. `paths_are_same_entry`'s path-canonicalizing comparison (already used elsewhere in
+/// this file for a related check) does not depend on that identity machinery, so it is used as
+/// a fallback whenever the caller wants symlinks dereferenced for the comparison.
+fn refers_to_same_file(source: &Path, dest: &Path, dereference: bool) -> bool {
+    paths_refer_to_same_file(source, dest, dereference)
+        || (dereference && paths_are_same_entry(source, dest))
+}
+
 /// Decide whether source and destination files are the same and
 /// copying is forbidden.
 ///
@@ -2184,7 +2242,7 @@ fn is_forbidden_to_copy_to_same_file(
     // only disable dereference if both source and dest is symlink and dereference flag is disabled
     let dereference_to_compare =
         options.dereference(source_in_command_line) || (!source_is_symlink || !dest_is_symlink);
-    if !paths_refer_to_same_file(source, dest, dereference_to_compare) {
+    if !refers_to_same_file(source, dest, dereference_to_compare) {
         return false;
     }
     if options.backup != BackupMode::None {
@@ -2708,7 +2766,7 @@ fn copy_file(
                 translate!("cp-error-not-writing-dangling-symlink", "dest" => dest.quote()),
             ));
         }
-        if paths_refer_to_same_file(source, dest, true)
+        if refers_to_same_file(source, dest, true)
             && matches!(
                 options.overwrite,
                 OverwriteMode::Clobber(ClobberMode::RemoveDestination)
@@ -2738,7 +2796,7 @@ fn copy_file(
                 OverwriteMode::Clobber(ClobberMode::RemoveDestination)
             ))
     {
-        if paths_refer_to_same_file(source, dest, true) && options.copy_mode == CopyMode::Link {
+        if refers_to_same_file(source, dest, true) && options.copy_mode == CopyMode::Link {
             if source_is_symlink {
                 if !dest_is_symlink {
                     return Ok(());
@@ -2834,6 +2892,16 @@ fn copy_file(
     };
 
     let dest_metadata = dest.symlink_metadata().ok();
+
+    // GNU refuses to replace a directory with a file before trying to copy.
+    if !source_metadata.is_dir() && dest_metadata.as_ref().is_some_and(Metadata::is_dir) {
+        return Err(translate!(
+            "cp-error-cannot-overwrite-directory-with-non-directory",
+            "dir" => dest.quote(),
+            "source" => source.quote()
+        )
+        .into());
+    }
 
     let dest_permissions = calculate_dest_permissions(
         dest_metadata.as_ref(),
@@ -3032,8 +3100,16 @@ fn copy_helper(
         }
     }
 
+    // A trailing slash asks for a directory: GNU fails looking up one that exists as
+    // something else, and creating one that does not exist.
     if path_ends_with_terminator(dest) && !dest.is_dir() {
-        return Err(CpError::NotADirectory(dest.to_path_buf()));
+        let message = if shown(dest).symlink_metadata().is_ok() {
+            translate!("cp-error-cannot-stat-error", "path" => dest.quote(), "error" => "Not a directory")
+        } else {
+            translate!("cp-error-cannot-create-regular-file", "path" => dest.quote())
+                + ": Not a directory"
+        };
+        return Err(message.into());
     }
 
     #[cfg(unix)]
@@ -3150,12 +3226,31 @@ fn copy_link(
     )
 }
 
+/// Why `path` cannot hold the files copied into it, as GNU words it: the error from looking it
+/// up, or that it is not a directory.
+pub(crate) fn not_a_directory_reason(path: &Path) -> String {
+    match fs::metadata(path) {
+        Err(error) => strip_errno(&error),
+        Ok(_) => "Not a directory".to_owned(),
+    }
+}
+
+/// `path` as GNU names it in a message: without the trailing slash a join leaves.
+pub(crate) fn shown(path: &Path) -> &Path {
+    path.to_str()
+        .and_then(|text| text.strip_suffix('/'))
+        .filter(|text| !text.is_empty())
+        .map_or(path, Path::new)
+}
+
 /// Generate an error message if `target` is not the correct `target_type`
 pub fn verify_target_type(target: &Path, target_type: TargetType) -> CopyResult<()> {
     match (target_type, target.is_dir()) {
-        (TargetType::Directory, false) => Err(translate!("cp-error-target-not-directory", "target" => target.quote())
-        .into()),
-        (TargetType::File, true) => Err(translate!("cp-error-cannot-overwrite-directory-with-non-directory", "dir" => target.quote())
+        (TargetType::Directory, false) => Err(translate!(
+            "cp-error-target-not-directory",
+            "target" => target.quote(),
+            "error" => not_a_directory_reason(target)
+        )
         .into()),
         _ => Ok(()),
     }

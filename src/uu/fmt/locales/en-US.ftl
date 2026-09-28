@@ -18,15 +18,15 @@ fmt-tab-width-help = Treat tabs as TABWIDTH spaces for determining line length, 
 
 # Error messages
 fmt-error-invalid-goal = invalid goal: {$goal}
-fmt-error-goal-greater-than-width = GOAL cannot be greater than WIDTH.
+fmt-error-goal-greater-than-width = invalid width: '{$goal}': Value too large for data type
 fmt-error-invalid-width = invalid width: {$width}
 fmt-error-width-out-of-range = invalid width: '{$width}': Numerical result out of range
 fmt-error-invalid-tabwidth = Invalid TABWIDTH specification: {$tabwidth}
 fmt-error-first-option-width = invalid option -- {$option}; -WIDTH is recognized only when it is the first
   option; use -w N instead
   Try 'fmt --help' for more information.
-fmt-error-read = read error
 fmt-error-invalid-width-malformed = invalid width: {$width}
 fmt-error-cannot-open-for-reading = cannot open {$file} for reading
 fmt-error-cannot-get-metadata = cannot get metadata for {$file}
+fmt-error-reading-directory = error reading {$file}: Is a directory
 fmt-error-failed-to-write-output = failed to write output

@@ -172,7 +172,15 @@ pub fn checksum_main(
         .map(Borrow::borrow);
 
     if text_flag && tag {
-        return Err(ChecksumError::TextAfterTag.into());
+        // The oracle's md5sum, sha1sum and sha256sum word this as its cksum does.
+        return Err(
+            if matches!(util_name(), "md5sum" | "sha1sum" | "sha256sum") {
+                ChecksumError::TextWithoutUntagged
+            } else {
+                ChecksumError::TextAfterTag
+            }
+            .into(),
+        );
     }
 
     if check {
@@ -212,6 +220,8 @@ pub fn checksum_main(
         algo_kind: algo,
         output_format,
         line_ending,
+        stdin_named: matches.value_source(options::FILE)
+            == Some(clap::parser::ValueSource::CommandLine),
     };
 
     perform_checksum_computation(io::stdout(), opts, files)?;

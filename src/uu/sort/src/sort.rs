@@ -2423,25 +2423,26 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     }
 
     if let Some(arg) = matches.get_one::<OsString>(options::SEPARATOR) {
-        let mut separator = arg.to_str().ok_or_else(|| {
-            UUsageError::new(
-                2,
-                translate!("sort-separator-not-valid-unicode", "arg" => arg.quote()),
-            )
-        })?;
-        if separator == "\\0" {
-            separator = "\0";
-        }
-        // This rejects non-ASCII codepoints, but perhaps we don't have to.
-        // On the other hand GNU accepts any single byte, valid unicode or not.
-        // (Supporting multi-byte chars would require changes in tokenize_with_separator().)
-        let &[sep_char] = separator.as_bytes() else {
-            return Err(UUsageError::new(
-                2,
-                translate!("sort-separator-must-be-one-char", "separator" => separator.quote()),
-            ));
+        // GNU accepts any single byte as `-t`'s separator, valid UTF-8 or not -- read the raw
+        // encoded bytes directly instead of requiring `arg` to be a `str` first (verified
+        // against the oracle: `sort -t $'\xff'` is accepted, not refused as "not valid
+        // unicode"). The one text special case, the two-character escape `\0` for an actual
+        // NUL byte, is plain ASCII, so it's still recognized at the byte level.
+        // (Supporting multi-byte separators would require changes in
+        // tokenize_with_separator().)
+        let bytes = arg.as_encoded_bytes();
+        let sep_byte = if bytes == b"\\0" {
+            0u8
+        } else {
+            let &[sep_char] = bytes else {
+                return Err(UUsageError::new(
+                    2,
+                    translate!("sort-separator-must-be-one-char", "separator" => arg.quote()),
+                ));
+            };
+            sep_char
         };
-        settings.separator = Some(sep_char);
+        settings.separator = Some(sep_byte);
     }
 
     if let Some(values) = matches.get_many::<String>(options::KEY) {
@@ -2546,8 +2547,8 @@ pub fn uu_app() -> Command {
                 "human-numeric",
                 "month",
                 "numeric",
-                "version",
                 "random",
+                "version",
             ])),
     )
     .arg(make_sort_mode_arg(
@@ -2763,6 +2764,10 @@ fn exec(
     tmp_dir: &mut TmpDirWrapper,
 ) -> UResult<()> {
     if settings.merge {
+        // WASI has no threads, and the threaded merger reads each input on one.
+        #[cfg(target_os = "wasi")]
+        return ext_sort::merge_inputs(files, settings, output);
+        #[cfg(not(target_os = "wasi"))]
         merge::merge(files, settings, output, tmp_dir)
     } else if settings.check {
         if files.len() > 1 {
@@ -2771,11 +2776,19 @@ fn exec(
                 translate!("sort-only-one-file-allowed-with-c"),
             ))
         } else {
+            #[cfg(target_os = "wasi")]
+            return ext_sort::check_input(files.first().unwrap(), settings);
+            #[cfg(not(target_os = "wasi"))]
             check::check(files.first().unwrap(), settings)
         }
     } else {
         // Open each input once, when it is reached, so that only one input is open
         // at a time and FIFOs are never reopened.
+        #[cfg(target_os = "wasi")]
+        let mut lines = files
+            .iter()
+            .map(|path| open(path).map(|reader| ext_sort::named_reader(path, reader)));
+        #[cfg(not(target_os = "wasi"))]
         let mut lines = files.iter().map(open);
         ext_sort(&mut lines, settings, output, tmp_dir)
     }

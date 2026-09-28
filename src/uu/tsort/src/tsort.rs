@@ -162,6 +162,8 @@ fn process_input<R: BufRead>(reader: R, graph: &mut Graph) -> Result<(), Error> 
     // Tokens are kept as raw bytes so invalid UTF-8 can be preserved.
 
     let result = parser::for_each_token(reader, |token| {
+        // GNU keys a token as a C string: it ends at a NUL byte.
+        let token = token.split(|&byte| byte == 0).next().unwrap_or(token);
         let token_sym = graph.interner.get_or_intern(token);
 
         if let Some(from) = pending.take() {

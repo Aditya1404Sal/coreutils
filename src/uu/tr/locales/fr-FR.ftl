@@ -42,6 +42,7 @@ tr-error-complement-more-than-one-unique = lors de la traduction avec des classe
   string2 doit mapper tous les caractères du domaine vers un seul
 tr-error-backwards-range = les points de fin de plage de '{ $start }-{ $end }' sont dans l'ordre inverse de la séquence de collation
 tr-error-multiple-char-in-equivalence = { $chars } : l'opérande de classe d'équivalence doit être un seul caractère
+tr-error-equivalence-class-in-set2 = les expressions [=c=] ne peuvent pas apparaître dans la chaîne2 lors d'une traduction
 
 # Étiquettes de diagnostic : ce que le caret désigne dans un ensemble
 tr-diag-label-backwards-range = vouliez-vous dire '{ $suggestion }' ?

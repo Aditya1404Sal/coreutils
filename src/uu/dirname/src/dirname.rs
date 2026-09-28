@@ -166,6 +166,10 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         .collect();
 
     for path in &dirnames {
+        // WASI keeps a name's bytes as given, valid UTF-8 or not, like Unix.
+        #[cfg(target_os = "wasi")]
+        let path_bytes = path.as_encoded_bytes();
+        #[cfg(not(target_os = "wasi"))]
         let path_bytes = uucore::os_str_as_bytes(path.as_os_str()).unwrap_or(&[]);
         let result = dirname_string_manipulation(path_bytes);
 
@@ -175,7 +179,9 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
             let result_os = std::ffi::OsStr::from_bytes(result);
             print_verbatim(result_os)?;
         }
-        #[cfg(not(unix))]
+        #[cfg(target_os = "wasi")]
+        stdout().write_all(result)?;
+        #[cfg(not(any(unix, target_os = "wasi")))]
         {
             // On non-Unix, fall back to lossy conversion
             if let Ok(s) = std::str::from_utf8(result) {

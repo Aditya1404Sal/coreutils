@@ -70,7 +70,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
             Ok(0) => {
                 return Err(USimpleError::new(
                     1,
-                    translate!("fold-error-width-out-of-range", "width" => inp_width.quote()),
+                    translate!("fold-error-width-zero", "width" => inp_width.quote()),
                 ));
             }
             Ok(parsed_width) => parsed_width,
@@ -83,7 +83,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
             Err(_) => {
                 return Err(USimpleError::new(
                     1,
-                    translate!("fold-error-illegal-width", "width" => inp_width.quote()),
+                    translate!("fold-error-illegal-width", "width" => uucore::display::gnu_quote(inp_width)),
                 ));
             }
         },
@@ -155,6 +155,17 @@ fn handle_obsolete(args: &[String]) -> (Vec<String>, Option<String>) {
     (args.to_vec(), None)
 }
 
+/// GNU quotes only the empty name (`''`) in a diagnostic -- an ordinary missing or unreadable
+/// name (e.g. `/tmp/nosuch`, or a directory) is reported bare, so this can't just be
+/// `filename.quote()`.
+fn quote_if_empty(filename: &str) -> String {
+    if filename.is_empty() {
+        "''".to_string()
+    } else {
+        filename.to_string()
+    }
+}
+
 fn fold(
     filenames: &[String],
     bytes: bool,
@@ -176,22 +187,37 @@ fn fold(
             match File::open(Path::new(filename)) {
                 Ok(f) => file_buf = f,
                 Err(e) => {
-                    show!(e.map_err_context(|| filename.to_string()));
+                    show!(e.map_err_context(|| quote_if_empty(filename)));
                     continue;
                 }
             }
             &mut file_buf as &mut dyn Read
         });
 
-        if bytes {
-            fold_file_bytewise(buffer, spaces, width, &mut output)?;
+        // A read failure partway through (e.g. a directory: opening one succeeds, only an
+        // actual read fails) is reported the same way as an open failure -- by name, and kept
+        // processing the remaining operands -- not the generic, nameless error `?` would
+        // propagate as instead.
+        let read_result = if bytes {
+            fold_file_bytewise(buffer, spaces, width, &mut output, filename)
         } else {
             let mode = if characters {
                 WidthMode::Characters
             } else {
                 WidthMode::Columns
             };
-            fold_file(buffer, spaces, width, mode, &mut output)?;
+            fold_file(buffer, spaces, width, mode, &mut output, filename)
+        };
+        // Flush this operand's output now rather than at the very end: GNU reports the next
+        // operand's error (a missing or unopenable file, or this one's own read failure just
+        // below) only after this one's output has already appeared, and a `BufWriter` held open
+        // across the whole loop would otherwise let a later, immediate stderr write overtake
+        // this one's buffered stdout content.
+        output
+            .flush()
+            .map_err_context(|| translate!("fold-error-failed-to-write"))?;
+        if let Err(e) = read_result {
+            show!(e);
         }
     }
 
@@ -214,6 +240,7 @@ fn fold_file_bytewise<T: Read, W: Write>(
     spaces: bool,
     width: usize,
     output: &mut W,
+    filename: &str,
 ) -> UResult<()> {
     let mut line = Vec::new();
 
@@ -226,7 +253,7 @@ fn fold_file_bytewise<T: Read, W: Write>(
         while line.len() <= width {
             let buf = file
                 .fill_buf()
-                .map_err_context(|| translate!("fold-error-readline"))?;
+                .map_err_context(|| quote_if_empty(filename))?;
             if buf.is_empty() {
                 break;
             }
@@ -259,14 +286,19 @@ fn fold_file_bytewise<T: Read, W: Write>(
         }
 
         // No newline: with -s, break after the last whitespace (excluding CR);
-        // otherwise hard-wrap at `width`.
+        // otherwise hard-wrap at `width`. `-b` counts bytes toward the width budget (unlike
+        // the default column-counting fold), but GNU still never splits a multi-byte UTF-8
+        // character in two -- verified against the oracle: three 2-byte 'é' characters with
+        // `-w 3` fold one character per line (2 bytes each), not a 3-byte chunk straddling a
+        // character. `width` alone can land inside such a sequence; back it up to the
+        // character's own start.
         let end = if spaces {
             chunk
                 .iter()
                 .rposition(|c| c.is_ascii_whitespace() && *c != CR)
                 .map_or(width, |i| i + 1)
         } else {
-            width
+            last_utf8_boundary_at_or_before(&line, width)
         };
 
         // Width/space-driven fold: `end <= width` and the check above ruled out
@@ -276,6 +308,23 @@ fn fold_file_bytewise<T: Read, W: Write>(
         line.drain(..end);
     }
     Ok(())
+}
+
+/// The largest index `<= width` that isn't in the middle of a UTF-8 character -- i.e. `line[i]`
+/// is not a continuation byte (`0x80..=0xBF`). A UTF-8 character is at most 4 bytes, so at most
+/// 3 steps back ever finds one; if `width` itself is smaller than the character starting before
+/// it (an extreme `-w` too small even for one character) or the input isn't valid UTF-8 at this
+/// point, fall back to `width` unchanged (raw truncation, as for any other binary data).
+fn last_utf8_boundary_at_or_before(line: &[u8], width: usize) -> usize {
+    for back in 0..4 {
+        let Some(end) = width.checked_sub(back) else {
+            break;
+        };
+        if !matches!(line.get(end), Some(byte) if (0x80..=0xBF).contains(byte)) {
+            return end;
+        }
+    }
+    width
 }
 
 fn next_tab_stop(col_count: usize) -> usize {
@@ -684,6 +733,7 @@ fn fold_file<T: Read, W: Write>(
     width: usize,
     mode: WidthMode,
     writer: &mut W,
+    filename: &str,
 ) -> UResult<()> {
     let mut output = Vec::new();
     let mut col_count = 0;
@@ -704,7 +754,7 @@ fn fold_file<T: Read, W: Write>(
         loop {
             let buffer = file
                 .fill_buf()
-                .map_err_context(|| translate!("fold-error-readline"))?;
+                .map_err_context(|| quote_if_empty(filename))?;
             if buffer.is_empty() {
                 break;
             }

@@ -51,8 +51,11 @@ cp-help-copy-contents = Non implémenté : copier le contenu des fichiers spéci
 
 # Messages d'erreur
 cp-error-missing-file-operand = opérande fichier manquant
+    Essayez « cp --help » pour plus d'informations.
 cp-error-missing-destination-operand = opérande fichier de destination manquant après { $source }
+    Essayez « cp --help » pour plus d'informations.
 cp-error-extra-operand = opérande supplémentaire { $operand }
+    Essayez « cp --help » pour plus d'informations.
 cp-error-same-file = { $source } et { $dest } sont le même fichier
 cp-error-backing-up-destroy-source = sauvegarder { $dest } pourrait détruire la source ; { $source } non copié
 cp-error-cannot-open-for-reading = impossible d'ouvrir { $source } en lecture

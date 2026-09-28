@@ -575,21 +575,30 @@ impl From<MaybeNonUtf8String> for NumOrStr {
     }
 }
 
+/// A string as expr reads an integer: an optional `-`, then digits. (A leading `+` makes it a
+/// string, as in GNU.)
+fn parse_integer(bytes: &[u8]) -> Option<BigInt> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    if text.starts_with('+') {
+        return None;
+    }
+    text.parse::<BigInt>().ok()
+}
+
 impl NumOrStr {
     pub fn to_bigint(&self) -> Option<BigInt> {
         match self {
             Self::Num(num) => Some(num.clone()),
-            Self::Str(str) => std::str::from_utf8(str).ok()?.parse::<BigInt>().ok(),
+            Self::Str(str) => parse_integer(str),
         }
     }
 
     pub fn eval_as_bigint(self) -> ExprResult<BigInt> {
         match self {
             Self::Num(num) => Ok(num),
-            Self::Str(str) => std::str::from_utf8(&str)
-                .ok()
-                .and_then(|s| s.parse::<BigInt>().ok())
-                .ok_or_else(|| ExprError::NonIntegerArgument(str.clone())),
+            Self::Str(str) => {
+                parse_integer(&str).ok_or_else(|| ExprError::NonIntegerArgument(str.clone()))
+            }
         }
     }
 

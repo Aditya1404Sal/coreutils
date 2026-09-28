@@ -5,7 +5,6 @@
 
 // spell-checker:ignore powf seps replacen
 
-use uucore::display::Quotable;
 use uucore::i18n::decimal::{locale_decimal_separator, locale_grouping_separator};
 use uucore::translate;
 
@@ -185,36 +184,40 @@ fn detailed_error_message(s: &str, unit: Unit, unit_separator: &str) -> Option<S
     }
 
     let number_prefix = find_valid_number_with_suffix(s, unit)
-        .ok_or(translate!("numfmt-error-invalid-number", "input" => s.quote()))
+        .ok_or(translate!("numfmt-error-invalid-number", "input" => s))
         .ok()?;
 
     if number_prefix == "." {
-        return Some(translate!("numfmt-error-invalid-suffix", "input" => s.quote()));
+        return Some(
+            translate!("numfmt-error-invalid-suffix", "input" => uucore::display::gnu_quote(s)),
+        );
     }
 
     if number_prefix.ends_with('.') {
-        return Some(translate!("numfmt-error-invalid-number", "input" => s.quote()));
+        return Some(translate!("numfmt-error-invalid-number", "input" => s));
     }
 
     let valid_part = &s[..valid_prefix_len(s, unit, unit_separator)];
 
     if valid_part != s && valid_part.parse::<f64>().is_ok() {
         return match s.chars().nth(valid_part.len()) {
-            Some('+' | '-') => {
-                Some(translate!("numfmt-error-invalid-suffix", "input" => s.quote()))
-            }
+            Some('+' | '-') => Some(
+                translate!("numfmt-error-invalid-suffix", "input" => uucore::display::gnu_quote(s)),
+            ),
             Some(v) if RawSuffix::try_from(&v).is_ok() => Some(
                 translate!("numfmt-error-rejecting-suffix", "number" => valid_part, "suffix" => s[valid_part.len()..]),
             ),
 
-            _ => Some(translate!("numfmt-error-invalid-suffix", "input" => s.quote())),
+            _ => Some(
+                translate!("numfmt-error-invalid-suffix", "input" => uucore::display::gnu_quote(s)),
+            ),
         };
     }
 
     if valid_part != s {
         let trailing = s[valid_part.len()..].trim_start();
         return Some(
-            translate!("numfmt-error-invalid-specific-suffix", "input" => s.quote(), "suffix" => trailing.quote()),
+            translate!("numfmt-error-invalid-specific-suffix", "input" => uucore::display::gnu_quote(s), "suffix" => uucore::display::gnu_quote(trailing)),
         );
     }
     None
@@ -223,15 +226,17 @@ fn detailed_error_message(s: &str, unit: Unit, unit_separator: &str) -> Option<S
 fn parse_number_part(s: &str, input: &str) -> Result<ParsedNumber> {
     let dec_sep = locale_decimal_separator();
     if s.ends_with(dec_sep) {
-        return Err(translate!("numfmt-error-invalid-number", "input" => input.quote()));
+        return Err(translate!("numfmt-error-invalid-number", "input" => input));
     }
 
     // GNU rejects a leading '+' and scientific notation, which Rust's parsers accept.
     if s.starts_with('+') {
-        return Err(translate!("numfmt-error-invalid-number", "input" => input.quote()));
+        return Err(translate!("numfmt-error-invalid-number", "input" => input));
     }
     if s.bytes().any(|b| b == b'e' || b == b'E') {
-        return Err(translate!("numfmt-error-invalid-suffix", "input" => input.quote()));
+        return Err(
+            translate!("numfmt-error-invalid-suffix", "input" => uucore::display::gnu_quote(input)),
+        );
     }
 
     if let Ok(n) = s.parse::<i128>() {
@@ -239,7 +244,7 @@ fn parse_number_part(s: &str, input: &str) -> Result<ParsedNumber> {
     }
 
     if dec_sep != "." && s.contains('.') {
-        return Err(translate!("numfmt-error-invalid-number", "input" => input.quote()));
+        return Err(translate!("numfmt-error-invalid-number", "input" => input));
     }
 
     let normalized = if dec_sep == "." {
@@ -251,7 +256,7 @@ fn parse_number_part(s: &str, input: &str) -> Result<ParsedNumber> {
     normalized
         .parse::<f64>()
         .map(ParsedNumber::Float)
-        .map_err(|_| translate!("numfmt-error-invalid-number", "input" => input.quote()))
+        .map_err(|_| translate!("numfmt-error-invalid-number", "input" => input))
 }
 
 fn parse_suffix(
@@ -267,7 +272,9 @@ fn parse_suffix(
 
     let with_i = trimmed.ends_with('i');
     if with_i && ![Unit::Auto, Unit::Iec(true)].contains(&unit) {
-        return Err(translate!("numfmt-error-invalid-suffix", "input" => s.quote()));
+        return Err(
+            translate!("numfmt-error-invalid-suffix", "input" => uucore::display::gnu_quote(s)),
+        );
     }
     let mut iter = trimmed.chars();
     if with_i {
@@ -280,7 +287,7 @@ fn parse_suffix(
     match (suffix, last) {
         (Some(_), _) => {}
         (None, Some(c)) if c.is_ascii_digit() && !with_i => {}
-        _ => return Err(translate!("numfmt-error-invalid-number", "input" => s.quote())),
+        _ => return Err(translate!("numfmt-error-invalid-number", "input" => s)),
     }
 
     let suffix_len = suffix.map_or(0, |(_, with_i)| 1 + usize::from(with_i));
@@ -294,13 +301,17 @@ fn parse_suffix(
             } else if unit_separator.is_empty() {
                 0
             } else {
-                return Err(translate!("numfmt-error-invalid-suffix", "input" => s.quote()));
+                return Err(
+                    translate!("numfmt-error-invalid-suffix", "input" => uucore::display::gnu_quote(s)),
+                );
             }
         } else {
             let number_trimmed = number_part.trim_end();
             let whitespace = number_part.len() - number_trimmed.len();
             if whitespace > 1 {
-                return Err(translate!("numfmt-error-invalid-suffix", "input" => s.quote()));
+                return Err(
+                    translate!("numfmt-error-invalid-suffix", "input" => uucore::display::gnu_quote(s)),
+                );
             }
             whitespace
         };
@@ -946,7 +957,9 @@ pub fn write_formatted_with_delimiter<W: std::io::Write + ?Sized>(
         if field_selected {
             // Field must be valid UTF-8 for numeric conversion
             let field_str = std::str::from_utf8(field)
-                .map_err(|_| translate!("numfmt-error-invalid-number", "input" => escape_line(field).quote()))?
+                .map_err(
+                    |_| translate!("numfmt-error-invalid-number", "input" => escape_line(field)),
+                )?
                 .trim_start();
             let formatted = format_string(field_str, options, None)?;
             writer.write_all(formatted.as_bytes())?;
@@ -994,6 +1007,18 @@ pub fn write_formatted_with_whitespace<W: std::io::Write + ?Sized>(
 
             let formatted = format_string(field, options, implicit_padding)?;
             writer.write_all(formatted.as_bytes())?;
+        } else if n > 1 {
+            // Same normalization as the selected-field branch above: GNU replaces only the
+            // *first* character of the separator with a canonical space and keeps any further
+            // whitespace in the run verbatim -- so a lone tab becomes one space (verified:
+            // `numfmt --format '%-5f'` on tab-separated `2048\ta` prints `2.0K  a`, one space
+            // from the %-5f padding plus the normalized tab), while a run of several spaces
+            // stays exactly as wide as it was (verified: `2048   a   b` through plain `numfmt`
+            // prints `2.0K   a   b`, the two 3-space gaps untouched).
+            writer.write_all(b" ")?;
+            let prefix = &prefix[prefix.chars().next().map_or(0, char::len_utf8)..];
+            writer.write_all(prefix.as_bytes())?;
+            writer.write_all(field.as_bytes())?;
         } else {
             // the -z option converts an initial \n into a space
             let prefix = if options.zero_terminated && prefix.starts_with('\n') {
@@ -1002,7 +1027,8 @@ pub fn write_formatted_with_whitespace<W: std::io::Write + ?Sized>(
             } else {
                 prefix
             };
-            // add unselected field without conversion
+            // Leading whitespace before the very first field is preserved verbatim (it isn't a
+            // field separator).
             writer.write_all(prefix.as_bytes())?;
             writer.write_all(field.as_bytes())?;
         }

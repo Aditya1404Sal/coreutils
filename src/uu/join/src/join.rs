@@ -13,8 +13,6 @@ use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Split, Stdin, Write, stdin, stdout};
 use std::num::IntErrorKind;
-#[cfg(unix)]
-use std::os::unix::ffi::OsStrExt;
 use thiserror::Error;
 use uucore::diagnostics::OptionValue;
 use uucore::display::Quotable;
@@ -146,7 +144,15 @@ impl Separator for WhitespaceSep {
             }
             last_end = i + 1;
         }
-        field_ranges.push((last_end, haystack.len()));
+        // A run of trailing whitespace already consumed everything up to the end of the line:
+        // don't also emit an empty final field for it (GNU doesn't -- verified against the
+        // oracle: a trailing "a  " field before the join key on the other side joins as
+        // "... a b", not "... a  b" with a phantom empty field's separator in between). A
+        // genuinely empty line (`last_end == 0 == haystack.len()`) still gets its one empty
+        // field, unchanged.
+        if last_end < haystack.len() || last_end == 0 {
+            field_ranges.push((last_end, haystack.len()));
+        }
         field_ranges
     }
 
@@ -709,18 +715,19 @@ fn parse_separator(value_os: &OsString) -> UResult<SepSetting> {
         return Ok(SepSetting::Line);
     }
 
-    #[cfg(unix)]
+    // WASI's strings are bytes, as unix's are.
+    #[cfg(any(unix, target_os = "wasi"))]
     {
-        let value = value_os.as_bytes();
+        let value = value_os.as_encoded_bytes();
         if value.len() == 1 {
             return Ok(SepSetting::Byte(value[0]));
         }
     }
 
     let Some(value) = value_os.to_str() else {
-        #[cfg(unix)]
+        #[cfg(any(unix, target_os = "wasi"))]
         return Err(USimpleError::new(1, translate!("join-error-non-utf8-tab")));
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, target_os = "wasi")))]
         return Err(USimpleError::new(
             1,
             translate!("join-error-unprintable-separators"),

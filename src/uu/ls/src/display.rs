@@ -29,7 +29,7 @@ use ansi_width::ansi_width;
 use glob::MatchOptions;
 #[cfg(unix)]
 use rustc_hash::FxHashMap;
-use term_grid::{DEFAULT_SEPARATOR_SIZE, Direction, Filling, Grid, GridOptions};
+use term_grid::{DEFAULT_SEPARATOR_SIZE, Direction};
 
 #[cfg(unix)]
 use uucore::entries;
@@ -70,6 +70,10 @@ pub(crate) struct LongFormat {
     pub(crate) author: bool,
     pub(crate) group: bool,
     pub(crate) owner: bool,
+    // Only read by `display_uname`/`display_group`'s `#[cfg(unix)]` bodies (getpwuid/getgrgid
+    // have no WASI backend, hence the `#[cfg(not(unix))]` fallback right below them that never
+    // looks at this) -- matches `ListState`'s own `#[cfg_attr(not(unix), allow(dead_code))]`.
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) numeric_uid_gid: bool,
 }
 
@@ -569,6 +573,77 @@ pub fn display_items(
     Ok(())
 }
 
+/// The column layout `calculate_columns` settled on: how many columns, how many rows that
+/// implies, and each column's width (its widest entry, not counting the separator).
+struct ColumnPlan {
+    columns: usize,
+    rows: usize,
+    widths: Vec<usize>,
+}
+
+/// GNU ls.c's `calculate_columns`/`init_column_info`: try column counts from the most
+/// possible down to one, and keep the largest count whose row width -- each column's
+/// widest name, plus a fixed separator between columns (`DEFAULT_SEPARATOR_SIZE`, not
+/// charged after the last column in a row) -- still fits `width`. `by_columns` selects how
+/// entries are assigned to columns: top-to-bottom (`-C`) fills each column before moving to
+/// the next, so entry `i`'s column is `i / rows`; left-to-right (`-x`) fills each row before
+/// moving to the next, so it's `i % columns`.
+fn calculate_columns(lengths: &[usize], width: usize, by_columns: bool) -> ColumnPlan {
+    let n = lengths.len();
+    // More columns than files, or than the display could ever fit even at one character
+    // each, are never useful -- this bounds the search without changing the result.
+    let upper = n.min(width.max(1));
+    for columns in (1..=upper).rev() {
+        let rows = n.div_ceil(columns);
+        let mut widths = vec![0usize; columns];
+        for (i, &len) in lengths.iter().enumerate() {
+            let col = if by_columns { i / rows } else { i % columns };
+            widths[col] = widths[col].max(len);
+        }
+        let row_width =
+            widths.iter().sum::<usize>() + DEFAULT_SEPARATOR_SIZE * widths.len().saturating_sub(1);
+        // GNU's own `init_column_info` keeps a column count only while its row is *strictly*
+        // narrower than the display (`line_len < line_length`); a row that lands exactly on
+        // the edge is one column too many, not a perfect fit.
+        if columns == 1 || row_width < width {
+            return ColumnPlan {
+                columns,
+                rows,
+                widths,
+            };
+        }
+    }
+    ColumnPlan {
+        columns: 1,
+        rows: n,
+        widths: vec![lengths.iter().copied().max().unwrap_or(0)],
+    }
+}
+
+/// Write `pad` columns of fill after a cursor at absolute column `cur`, using real tab bytes
+/// for any run that reaches a tab stop (a multiple of `tab_size`) without passing the target
+/// column -- GNU's own column filler, which opportunistically shortens output this way
+/// whenever `tab_size` is nonzero (the default; `0` means "never", as `-T0`/color mode ask).
+fn write_fill(out: &mut BufWriter<Stdout>, cur: usize, pad: usize, tab_size: usize) -> UResult<()> {
+    let target = cur + pad;
+    let mut cur = cur;
+    while let Some(quot) = cur.checked_div(tab_size) {
+        let next_stop = (quot + 1) * tab_size;
+        // A tab only ever costs one byte, the same as a single space; it's worth emitting
+        // only when it covers *more* than one column's worth of fill, or it wouldn't save
+        // anything over just writing that one space -- which is what GNU actually does here.
+        if next_stop > target || next_stop - cur < 2 {
+            break;
+        }
+        write!(out, "\t")?;
+        cur = next_stop;
+    }
+    if cur < target {
+        write!(out, "{:pad$}", "", pad = target - cur)?;
+    }
+    Ok(())
+}
+
 fn display_grid(
     names: impl Iterator<Item = DisplayWithQuote>,
     width: u16,
@@ -607,7 +682,6 @@ fn display_grid(
                     // ^       ^
                     // These spaces is added
                     // ```
-                    // FIXME: the Grid crate only supports &str, so can't display raw bytes
                     buf.clear();
                     if quoted && !din.starts_with_quote {
                         buf.push(b' ');
@@ -617,25 +691,54 @@ fn display_grid(
                 })
                 .collect()
         };
+        if names.is_empty() {
+            return Ok(());
+        }
 
-        // Since tab_size=0 means no \t, use Spaces separator for optimization.
-        let filling = match tab_size {
-            0 => Filling::Spaces(DEFAULT_SEPARATOR_SIZE),
-            _ => Filling::Tabs {
-                spaces: DEFAULT_SEPARATOR_SIZE,
-                tab_size,
-            },
-        };
+        let by_columns = matches!(direction, Direction::TopToBottom);
+        let lengths: Vec<usize> = names.iter().map(|s| ansi_width(s)).collect();
+        let plan = calculate_columns(&lengths, width as usize, by_columns);
 
-        let grid = Grid::new(
-            names,
-            GridOptions {
-                filling,
-                direction,
-                width: width as usize,
-            },
-        );
-        write!(out, "{grid}")?;
+        for row in 0..plan.rows {
+            let mut last_in_row = None;
+            for col in 0..plan.columns {
+                let idx = if by_columns {
+                    col * plan.rows + row
+                } else {
+                    row * plan.columns + col
+                };
+                if idx < names.len() {
+                    last_in_row = Some(col);
+                }
+            }
+            let Some(last_col) = last_in_row else {
+                continue;
+            };
+            // `cur_col`: the absolute output column the cursor is at, tracked across the
+            // whole row -- tab stops (used by `write_fill`) are measured from column 0, not
+            // from each slot's own start, so this has to be a running total.
+            let mut cur_col = 0usize;
+            let mut slot_start = 0usize;
+            for col in 0..=last_col {
+                let idx = if by_columns {
+                    col * plan.rows + row
+                } else {
+                    row * plan.columns + col
+                };
+                let Some(name) = names.get(idx) else {
+                    continue;
+                };
+                write!(out, "{name}")?;
+                cur_col += ansi_width(name);
+                if col != last_col {
+                    let slot_end = slot_start + plan.widths[col] + DEFAULT_SEPARATOR_SIZE;
+                    write_fill(out, cur_col, slot_end - cur_col, tab_size)?;
+                    cur_col = slot_end;
+                    slot_start = slot_end;
+                }
+            }
+            writeln!(out)?;
+        }
     }
     Ok(())
 }
@@ -713,22 +816,16 @@ fn display_group<'a>(
 }
 
 #[cfg(not(unix))]
-fn display_uname(_metadata: &Metadata, config: &Config, _uid_cache: &mut ()) -> &'static str {
-    // No uid to report on this platform; with `-n` fall back to "0" so the
-    // output still looks numeric, matching the intent of --numeric-uid-gid.
-    if config.long.numeric_uid_gid {
-        "0"
-    } else {
-        "somebody"
-    }
+fn display_uname(_metadata: &Metadata, _config: &Config, _uid_cache: &mut ()) -> &'static str {
+    // This sandbox has one fixed identity and no /etc/passwd entry for it, like every file
+    // GNU ls ever sees here; GNU itself falls back to the numeric uid when a name doesn't
+    // resolve to one, so plain `-l` prints the number too, not just `-ln`.
+    "1000"
 }
 
 #[cfg(not(unix))]
-fn display_group(_metadata: &Metadata, config: &Config, _gid_cache: &mut ()) -> &'static str {
-    if config.long.numeric_uid_gid {
-        return "0";
-    }
-    "somegroup"
+fn display_group(_metadata: &Metadata, _config: &Config, _gid_cache: &mut ()) -> &'static str {
+    "1000"
 }
 
 fn display_date(

@@ -25,6 +25,8 @@ use progress::{check_and_reset_sigusr1, install_sigusr1_handler};
 use uucore::io::OwnedFileDescriptorOrHandle;
 use uucore::translate;
 
+#[cfg(target_os = "wasi")]
+use std::cell::Cell;
 use std::cmp;
 use std::env;
 use std::ffi::OsString;
@@ -42,8 +44,12 @@ use std::os::unix::{
 #[cfg(windows)]
 use std::os::windows::{fs::MetadataExt, io::AsHandle};
 use std::path::Path;
+#[cfg(not(target_os = "wasi"))]
 use std::sync::atomic::AtomicU8;
-use std::sync::{Arc, atomic::Ordering::Relaxed, mpsc};
+use std::sync::mpsc;
+#[cfg(not(target_os = "wasi"))]
+use std::sync::{Arc, atomic::Ordering::Relaxed};
+#[cfg(not(target_os = "wasi"))]
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -87,6 +93,7 @@ struct Settings {
 /// the first caller each interval will yield true.
 ///
 /// When all instances are dropped the background thread will exit on the next interval.
+#[cfg(not(target_os = "wasi"))]
 pub struct Alarm {
     trigger: Arc<AtomicU8>,
 }
@@ -95,6 +102,7 @@ pub const ALARM_TRIGGER_NONE: u8 = 0;
 pub const ALARM_TRIGGER_TIMER: u8 = 1;
 pub const ALARM_TRIGGER_SIGNAL: u8 = 2;
 
+#[cfg(not(target_os = "wasi"))]
 impl Alarm {
     /// use to construct alarm timer with duration
     pub fn with_interval(interval: Duration) -> Self {
@@ -124,6 +132,56 @@ impl Alarm {
     /// by the closure returned from `manual_trigger_fn`
     pub fn get_trigger(&self) -> u8 {
         self.trigger.swap(ALARM_TRIGGER_NONE, Relaxed)
+    }
+}
+
+/// A timer which triggers on a given interval -- WASI variant.
+///
+/// WASI has no threads to run a background timer on (`thread::spawn` panics
+/// there -- see `spawn_progress_updater`'s doc comment for the same
+/// limitation on the progress printer). `get_trigger` is already polled once
+/// per iteration of `dd_copy`'s main loop, so this polls the wall clock
+/// itself there instead of relying on a separately-ticking thread: no loss
+/// of accuracy, since the alarm was never more than a poll target anyway.
+#[cfg(target_os = "wasi")]
+pub struct Alarm {
+    interval: Duration,
+    last: Cell<Instant>,
+    signaled: Cell<bool>,
+}
+
+#[cfg(target_os = "wasi")]
+impl Alarm {
+    /// use to construct alarm timer with duration
+    pub fn with_interval(interval: Duration) -> Self {
+        Self {
+            interval,
+            last: Cell::new(Instant::now()),
+            signaled: Cell::new(false),
+        }
+    }
+
+    /// Manually trigger the alarm as a signal event
+    pub fn manual_trigger(&self) {
+        self.signaled.set(true);
+    }
+
+    /// Use this function to poll for any pending alarm event
+    ///
+    /// Returns `ALARM_TRIGGER_NONE` for no pending event.
+    /// Returns `ALARM_TRIGGER_TIMER` if the event was triggered by timer
+    /// Returns `ALARM_TRIGGER_SIGNAL` if the event was triggered manually
+    /// by the closure returned from `manual_trigger_fn`
+    pub fn get_trigger(&self) -> u8 {
+        if self.signaled.replace(false) {
+            return ALARM_TRIGGER_SIGNAL;
+        }
+        let now = Instant::now();
+        if now.duration_since(self.last.get()) >= self.interval {
+            self.last.set(now);
+            return ALARM_TRIGGER_TIMER;
+        }
+        ALARM_TRIGGER_NONE
     }
 }
 
@@ -608,7 +666,19 @@ enum Density {
 /// Data destinations.
 enum Dest {
     /// Output to stdout.
+    #[cfg(not(target_os = "wasi"))]
     Stdout(File),
+
+    /// Output to stdout via its handle directly, with no owned duplicate.
+    ///
+    /// WASI: `Dest::Stdout` is built from a `try_clone_to_owned`'d file
+    /// descriptor (see [`Output::new_stdout`]), but cloning the stdio
+    /// stream resource that way fails with `ENOTSUP` there -- it isn't a
+    /// POSIX fd that supports `dup`. This variant writes to `io::Stdout`
+    /// as-is instead, the same way `Source::Stdin` already does for the
+    /// non-unix input side.
+    #[cfg(target_os = "wasi")]
+    StdoutRaw(io::Stdout),
 
     /// Output to a file.
     ///
@@ -628,7 +698,10 @@ enum Dest {
 impl Dest {
     fn fsync(&mut self) -> io::Result<()> {
         match self {
+            #[cfg(not(target_os = "wasi"))]
             Self::Stdout(stdout) => stdout.flush(),
+            #[cfg(target_os = "wasi")]
+            Self::StdoutRaw(stdout) => stdout.flush(),
             Self::File(f, _) => {
                 f.flush()?;
                 f.sync_all()
@@ -645,7 +718,10 @@ impl Dest {
 
     fn fdatasync(&mut self) -> io::Result<()> {
         match self {
+            #[cfg(not(target_os = "wasi"))]
             Self::Stdout(stdout) => stdout.flush(),
+            #[cfg(target_os = "wasi")]
+            Self::StdoutRaw(stdout) => stdout.flush(),
             Self::File(f, _) => {
                 f.flush()?;
                 f.sync_data()
@@ -663,7 +739,10 @@ impl Dest {
     #[cfg_attr(not(unix), allow(unused_variables))]
     fn seek(&mut self, n: u64, obs: usize) -> io::Result<u64> {
         match self {
+            #[cfg(not(target_os = "wasi"))]
             Self::Stdout(stdout) => io::copy(&mut io::repeat(0).take(n), stdout),
+            #[cfg(target_os = "wasi")]
+            Self::StdoutRaw(stdout) => io::copy(&mut io::repeat(0).take(n), stdout),
             Self::File(f, _) => {
                 #[cfg(unix)]
                 if let Ok(Some(len)) = try_get_len_of_block_device(f)
@@ -804,7 +883,10 @@ impl Write for Dest {
                     Err(e) => Err(e),
                 }
             }
+            #[cfg(not(target_os = "wasi"))]
             Self::Stdout(stdout) => stdout.write(buf),
+            #[cfg(target_os = "wasi")]
+            Self::StdoutRaw(stdout) => stdout.write(buf),
             #[cfg(unix)]
             Self::Fifo(f) => f.write(buf),
             #[cfg(unix)]
@@ -814,7 +896,10 @@ impl Write for Dest {
 
     fn flush(&mut self) -> io::Result<()> {
         match self {
+            #[cfg(not(target_os = "wasi"))]
             Self::Stdout(stdout) => stdout.flush(),
+            #[cfg(target_os = "wasi")]
+            Self::StdoutRaw(stdout) => stdout.flush(),
             Self::File(f, _) => f.flush(),
             #[cfg(unix)]
             Self::Fifo(f) => f.flush(),
@@ -841,8 +926,17 @@ struct Output<'a> {
 impl<'a> Output<'a> {
     /// Instantiate this struct with stdout as a destination.
     fn new_stdout(settings: &'a Settings) -> UResult<Self> {
-        let fx = OwnedFileDescriptorOrHandle::from(io::stdout())?;
-        let mut dst = Dest::Stdout(fx.into_file());
+        // WASI: `OwnedFileDescriptorOrHandle::from` needs to duplicate the
+        // fd (`try_clone_to_owned`), which the stdio stream resource
+        // doesn't support there (`ENOTSUP`); write to `io::stdout()`
+        // directly instead. See `Dest::StdoutRaw`.
+        #[cfg(target_os = "wasi")]
+        let mut dst = Dest::StdoutRaw(io::stdout());
+        #[cfg(not(target_os = "wasi"))]
+        let mut dst = {
+            let fx = OwnedFileDescriptorOrHandle::from(io::stdout())?;
+            Dest::Stdout(fx.into_file())
+        };
         dst.seek(settings.seek, settings.obs)
             .map_err_context(|| translate!("dd-error-write-error"))?;
         Ok(Self { dst, settings })
@@ -1121,6 +1215,37 @@ fn flush_caches_full_length(i: &Input, o: &Output) {
 ///
 /// If there is a problem reading from the input or writing to
 /// this output.
+/// Start the progress-reporting backend for `dd_copy`.
+///
+/// On every other platform this spawns a real thread running
+/// [`gen_prog_updater`]'s closure, decoupled from the copy loop so
+/// `status=progress` can tick live while the loop is still running.
+///
+/// WASI has no threads (`thread::spawn` panics there instead of returning
+/// an error -- see `Dest::StdoutRaw`'s doc comment for the same kind of
+/// gap elsewhere in this file), so there is nothing to decouple onto:
+/// this returns the updater closure itself, unstarted. The caller runs it
+/// synchronously, in place of joining a thread, once every message
+/// (including the final one) has already been queued -- see the
+/// `output_thread()` calls below. The transfer summary still prints
+/// correctly; only live ticking during a long copy is lost, since nothing
+/// can run concurrently with the foreground loop here.
+#[cfg(not(target_os = "wasi"))]
+fn spawn_progress_updater(
+    rx: mpsc::Receiver<ProgUpdate>,
+    status: Option<StatusLevel>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(gen_prog_updater(rx, status))
+}
+
+#[cfg(target_os = "wasi")]
+fn spawn_progress_updater(
+    rx: mpsc::Receiver<ProgUpdate>,
+    status: Option<StatusLevel>,
+) -> impl FnOnce() {
+    gen_prog_updater(rx, status)
+}
+
 fn dd_copy(mut i: Input, o: Output) -> io::Result<()> {
     // The read and write statistics.
     //
@@ -1156,7 +1281,7 @@ fn dd_copy(mut i: Input, o: Output) -> io::Result<()> {
     // to the receives `rx`, and the receiver prints the transfer
     // information.
     let (prog_tx, rx) = mpsc::channel();
-    let output_thread = thread::spawn(gen_prog_updater(rx, i.settings.status));
+    let output_thread = spawn_progress_updater(rx, i.settings.status);
 
     // Whether to truncate the output file after all blocks have been written.
     let truncate = !o.settings.oconv.notrunc;
@@ -1306,9 +1431,12 @@ fn dd_copy(mut i: Input, o: Output) -> io::Result<()> {
         // Flushing and syncing are pointless now, but the caller still wants the statistics.
         let prog_update = ProgUpdate::new(rstat, wstat, start.elapsed(), ProgUpdateType::Final);
         prog_tx.send(prog_update).unwrap_or(());
+        #[cfg(not(target_os = "wasi"))]
         output_thread
             .join()
             .expect("Failed to join with the output thread.");
+        #[cfg(target_os = "wasi")]
+        output_thread();
         return Err(e);
     }
 
@@ -1316,6 +1444,7 @@ fn dd_copy(mut i: Input, o: Output) -> io::Result<()> {
 }
 
 /// Flush output, print final stats, and join with the progress thread.
+#[cfg(not(target_os = "wasi"))]
 fn finalize<T>(
     mut output: BlockWriter,
     rstat: ReadStat,
@@ -1345,6 +1474,35 @@ fn finalize<T>(
     output_thread
         .join()
         .expect("Failed to join with the output thread.");
+
+    Ok(())
+}
+
+/// Flush output, print final stats, and run the (unstarted, synchronous)
+/// progress updater. See `spawn_progress_updater`'s doc comment: there is
+/// no thread to join on WASI, so `output_thread` here is just the updater
+/// closure, called once every message (including the final one just below)
+/// has already been queued.
+#[cfg(target_os = "wasi")]
+fn finalize<F: FnOnce()>(
+    mut output: BlockWriter,
+    rstat: ReadStat,
+    wstat: WriteStat,
+    start: Instant,
+    prog_tx: &mpsc::Sender<ProgUpdate>,
+    output_thread: F,
+    truncate: bool,
+) -> io::Result<()> {
+    let wstat_update = output.flush()?;
+    output.sync()?;
+    if truncate {
+        output.truncate()?;
+    }
+
+    let wstat = wstat + wstat_update;
+    let prog_update = ProgUpdate::new(rstat, wstat, start.elapsed(), ProgUpdateType::Final);
+    prog_tx.send(prog_update).unwrap_or(());
+    output_thread();
 
     Ok(())
 }

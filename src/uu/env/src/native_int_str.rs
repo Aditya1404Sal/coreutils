@@ -17,11 +17,11 @@ use std::ffi::OsString;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 #[cfg(all(target_os = "wasi", target_env = "p1"))]
 use std::os::wasi::ffi::{OsStrExt, OsStringExt};
-#[cfg(all(target_os = "wasi", target_env = "p2"))]
-use wasip2_ffi::{OsStrExt, OsStringExt};
 #[cfg(windows)]
 use std::os::windows::prelude::*;
 use std::{borrow::Cow, ffi::OsStr};
+#[cfg(all(target_os = "wasi", target_env = "p2"))]
+use wasip2_ffi::{OsStrExt, OsStringExt};
 
 // `std::os::wasi::ffi` is unstable on wasip2. `OsStr` is raw bytes there, so the stable
 // encoded-bytes APIs provide the same conversions.

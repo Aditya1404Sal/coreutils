@@ -84,7 +84,7 @@ enum LsError {
         _ => if 9 == .1.raw_os_error().unwrap_or(1) {
             translate!("ls-error-cannot-open-directory-bad-descriptor", "path" => .0.quote())
         } else {
-            translate!("ls-error-unknown-io-error", "path" => .0.quote(), "error" => format!("{:?}", .1))
+            translate!("ls-error-cannot-access", "path" => .0.quote(), "error" => strip_errno(.1))
         },
     })]
     IOErrorContext(PathBuf, std::io::Error, bool),
@@ -301,16 +301,18 @@ pub fn uu_app() -> Command {
         Arg::new(QUOTING_STYLE)
             .long(QUOTING_STYLE)
             .help(translate!("ls-help-set-quoting-style"))
+            // GNU's order, which its error for an invalid style lists them in.
             .value_parser(ShortcutValueParser::new([
                 PossibleValue::new("literal"),
-                PossibleValue::new("locale"),
                 PossibleValue::new("shell"),
-                PossibleValue::new("shell-escape"),
                 PossibleValue::new("shell-always"),
+                PossibleValue::new("shell-escape"),
                 PossibleValue::new("shell-escape-always"),
-                PossibleValue::new("clocale"),
-                PossibleValue::new("c").alias("c-maybe"),
+                PossibleValue::new("c"),
+                PossibleValue::new("c-maybe"),
                 PossibleValue::new("escape"),
+                PossibleValue::new("locale"),
+                PossibleValue::new("clocale"),
             ]))
             .overrides_with_all([
                 QUOTING_STYLE,
@@ -433,13 +435,14 @@ pub fn uu_app() -> Command {
             .long(options::SORT)
             .help(translate!("ls-help-sort-by-field"))
             .value_name("field")
+            // GNU's order, which its error for an invalid field lists them in.
             .value_parser(ShortcutValueParser::new([
-                "name",
                 "none",
-                "time",
                 "size",
+                "time",
                 "version",
                 "extension",
+                "name",
                 "width",
             ]))
             .overrides_with_all([

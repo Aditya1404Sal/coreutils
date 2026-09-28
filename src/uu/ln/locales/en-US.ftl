@@ -23,7 +23,7 @@ ln-help-target-directory = specify the DIRECTORY in which to create the links
 ln-help-no-target-directory = treat LINK_NAME as a normal file always
 ln-help-relative = create symbolic links relative to link location
 ln-help-verbose = print name of each linked file
-ln-error-target-is-not-directory = target {$target} is not a directory
+ln-error-target-is-not-directory = target {$target}: {$error}
 ln-error-same-file = {$file1} and {$file2} are the same file
 ln-error-missing-destination = missing destination file operand after {$operand}
 ln-error-extra-operand = extra operand {$operand}
@@ -34,6 +34,7 @@ ln-prompt-replace = replace {$file}?
 ln-cannot-backup = cannot backup {$file}
 ln-failed-to-access = failed to access {$file}
 ln-failed-to-create-hard-link = failed to create hard link {$dest} => {$source}
+ln-failed-to-create-hard-link-dest = failed to create hard link {$dest}
 ln-failed-to-create-symbolic-link = failed to create symbolic link {$dest}
 ln-failed-to-create-hard-link-dir = {$source}: hard link not allowed for directory
 ln-backup = backup: {$backup}

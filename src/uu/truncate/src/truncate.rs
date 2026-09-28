@@ -156,10 +156,22 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     let diag_args = uucore::diagnostics::capture(&args);
     let matches = uucore::clap_localization::handle_clap_result(uu_app(), args)?;
 
+    if !matches.contains_id(options::SIZE) && !matches.contains_id(options::REFERENCE) {
+        return Err(USimpleError::new(
+            1,
+            translate!("truncate-error-must-specify-size-or-reference"),
+        ));
+    }
+
     let files: Vec<OsString> = matches
         .get_many::<OsString>(options::ARG_FILES)
         .map(|v| v.cloned().collect())
-        .expect("ARG_FILES should be required by clap");
+        .unwrap_or_default();
+    if files.is_empty() {
+        let formatter = uucore::clap_localization::ErrorFormatter::new(uucore::util_name());
+        let code = formatter.print_missing_destination_operand(None, 1);
+        return Err(USimpleError::new(code, ""));
+    }
 
     let io_blocks = matches.get_flag(options::IO_BLOCKS);
     let no_create = matches.get_flag(options::NO_CREATE);
@@ -204,10 +216,14 @@ pub fn uu_app() -> Command {
                 .action(ArgAction::SetTrue),
         )
         .arg(
+            // Not `.required_unless_present(SIZE)`: GNU's wording for neither being given
+            // ("you must specify either '--size' or '--reference'") is its own message, not
+            // clap's generic missing-argument one -- checked manually in `uumain`, GNU-style
+            // and before the FILES check (confirmed against the oracle: `truncate` alone,
+            // with no operands at all, gives this message, not a missing-FILE one).
             Arg::new(options::REFERENCE)
                 .short('r')
                 .long(options::REFERENCE)
-                .required_unless_present(options::SIZE)
                 .help(translate!("truncate-help-reference"))
                 .value_name("RFILE")
                 .value_hint(clap::ValueHint::FilePath)
@@ -217,16 +233,18 @@ pub fn uu_app() -> Command {
             Arg::new(options::SIZE)
                 .short('s')
                 .long(options::SIZE)
-                .required_unless_present(options::REFERENCE)
                 .help(translate!("truncate-help-size"))
                 .allow_hyphen_values(true)
                 .value_name("SIZE"),
         )
         .arg(
+            // Not `.required(true)`: GNU checks SIZE/REFERENCE first, so `truncate` alone
+            // (neither those nor a FILE) gives the size-or-reference message above, not a
+            // missing-FILE one -- confirmed against the oracle. Checked manually in
+            // `uumain`, after that.
             Arg::new(options::ARG_FILES)
                 .value_name("FILE")
                 .action(ArgAction::Append)
-                .required(true)
                 .value_hint(clap::ValueHint::FilePath)
                 .value_parser(clap::value_parser!(OsString)),
         )
@@ -462,6 +480,21 @@ fn parse_mode_and_size(size_string: &str) -> Result<TruncateMode, ParseSizeError
 
         if is_modifier(c) {
             size_string = &size_string[1..];
+        }
+        // GNU `truncate`'s SIZE is plain decimal plus a unit suffix: unlike some other
+        // utilities that share this parser, it does not accept `0x`/`0b` numbers (nor does a
+        // leading `0` mean octal -- `010` is decimal 10, not 8).
+        if size_string.len() >= 2 {
+            let prefix = &size_string.as_bytes()[..2];
+            if prefix.eq_ignore_ascii_case(b"0x") || prefix.eq_ignore_ascii_case(b"0b") {
+                // `os_display::Quotable::quote` always uses straight quotes; GNU's own
+                // messages use curly ones once the locale is more than plain C/POSIX (this
+                // sandbox's default -- see `Session::set_identity`), matching the other
+                // hand-formatted diagnostics in this crate (e.g. `seq_usage_error`).
+                return Err(ParseSizeError::ParseFailure(format!(
+                    "\u{2018}{size_string}\u{2019}"
+                )));
+            }
         }
         let allow_list = allow_list_with_all_suffixes("EgGkKmMPQRtTYZ");
         let allow_list_ref = allow_list.iter().map(AsRef::as_ref).collect::<Vec<&str>>();

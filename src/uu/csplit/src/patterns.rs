@@ -124,7 +124,12 @@ fn extract_patterns(args: &[&str]) -> Result<Vec<Pattern>, CsplitError> {
                         // skip the next item
                         iter.next();
                         if let Some(times) = r.name("TIMES") {
-                            ExecutePattern::Times(times.as_str().parse::<usize>().unwrap() + 1)
+                            // A repeat count too big for `usize` (readily reached on the
+                            // 32-bit `usize` of the wasm32 target: GNU's own limit is
+                            // effectively "until a repetition fails to match", so any count
+                            // this large behaves identically to the largest one that fits.
+                            let times = times.as_str().parse::<usize>().unwrap_or(usize::MAX);
+                            ExecutePattern::Times(times.saturating_add(1))
                         } else {
                             ExecutePattern::Always
                         }
@@ -137,7 +142,12 @@ fn extract_patterns(args: &[&str]) -> Result<Vec<Pattern>, CsplitError> {
         if let Some(captures) = to_match_reg.captures(arg) {
             let offset = match captures.name("OFFSET") {
                 None => 0,
-                Some(m) => m.as_str().parse().unwrap(),
+                // GNU rejects an offset that overflows its own integer type rather than
+                // accepting or silently clamping it.
+                Some(m) => m
+                    .as_str()
+                    .parse::<i32>()
+                    .map_err(|_| CsplitError::IntegerExpectedAfterDelimiter(arg.to_owned()))?,
             };
             if let Some(up_to_match) = captures.name("UPTO") {
                 let pattern = Regex::new(up_to_match.as_str())

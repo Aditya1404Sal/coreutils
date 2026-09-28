@@ -345,7 +345,14 @@ impl SplitWriter<'_> {
             if self.options.elide_empty_files && self.size == 0 {
                 self.counter -= 1;
             } else if !self.options.quiet {
-                writeln!(io::stdout(), "{}", self.size).map_err(CsplitError::IoError)?;
+                let mut stdout = io::stdout();
+                writeln!(stdout, "{}", self.size).map_err(CsplitError::IoError)?;
+                // Flush this split's size now: `Stdout` is block-buffered off a real
+                // terminal, so without this, several splits' sizes sit unflushed until
+                // something else forces the buffer out -- and a pattern failing partway
+                // through (reported straight to stderr, unbuffered) would otherwise be seen
+                // before sizes for splits that were actually written out earlier.
+                stdout.flush().map_err(CsplitError::IoError)?;
             }
         }
         Ok(())

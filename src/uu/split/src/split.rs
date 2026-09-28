@@ -1386,6 +1386,25 @@ fn split(settings: &Settings) -> UResult<()> {
     };
     let io_blksize: usize = settings.io_blksize.unwrap_or(8 * 1024).try_into().unwrap();
 
+    // As GNU: splitting by lines or bytes makes no file at all from empty input.
+    if matches!(
+        settings.strategy,
+        Strategy::Lines(_) | Strategy::Bytes(_) | Strategy::LineBytes(_)
+    ) {
+        let mut first = [0u8; 1];
+        let read = loop {
+            match reader.read(&mut first) {
+                Err(e) if e.kind() == ErrorKind::Interrupted => {}
+                result => break result,
+            }
+        }
+        .map_err_context(|| settings.input.maybe_quote().to_string())?;
+        if read == 0 {
+            return Ok(());
+        }
+        reader = Box::new(io::Cursor::new(first).chain(reader));
+    }
+
     match settings.strategy {
         Strategy::Number(NumberType::Bytes(num_chunks)) => {
             n_chunks_by_byte(settings, &mut reader, num_chunks, None)

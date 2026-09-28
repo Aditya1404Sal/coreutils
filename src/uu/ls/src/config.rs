@@ -542,7 +542,7 @@ fn match_quoting_style_name(
         "shell-always" => QuotingStyleSpec::new(QuotingStyle::SHELL_QUOTE),
         "shell-escape" => QuotingStyleSpec::new(QuotingStyle::SHELL_ESCAPE),
         "shell-escape-always" => QuotingStyleSpec::new(QuotingStyle::SHELL_ESCAPE_QUOTE),
-        "c" => QuotingStyleSpec::new(QuotingStyle::C_DOUBLE),
+        "c" | "c-maybe" => QuotingStyleSpec::new(QuotingStyle::C_DOUBLE),
         "escape" => QuotingStyleSpec::new(QuotingStyle::C_NO_QUOTES),
         "locale" => QuotingStyleSpec {
             style: QuotingStyle::Literal {

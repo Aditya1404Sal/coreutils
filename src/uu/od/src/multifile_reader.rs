@@ -55,11 +55,17 @@ pub struct MultifileReader<'a> {
     ni: Vec<InputSource<'a>>,
     curr_file: Option<CurrentReader>,
     any_err: bool,
+    read_err: bool,
     file_name: Option<&'a str>,
 }
 
 pub trait HasError {
     fn has_error(&self) -> bool;
+
+    /// Whether reading an input failed while dumping (not while opening one, nor skipping).
+    fn read_failed(&self) -> bool {
+        false
+    }
 }
 
 impl MultifileReader<'_> {
@@ -68,6 +74,7 @@ impl MultifileReader<'_> {
             ni: fnames,
             curr_file: None, // normally this means done; call next_file()
             any_err: false,
+            read_err: false,
             file_name: None,
         };
         mf.next_file();
@@ -145,7 +152,16 @@ impl MultifileReader<'_> {
             let Some(curr) = self.curr_file.as_mut() else {
                 break;
             };
-            n_skip = skip_in_file(curr, n_skip)?;
+            n_skip = match skip_in_file(curr, n_skip) {
+                Ok(rest) => rest,
+                // As GNU: a file that cannot be read ends the skip; the rest is dumped.
+                Err(e) => {
+                    show_error!("{}: {}", self.file_name.unwrap_or("-"), strip_errno(&e));
+                    self.any_err = true;
+                    self.next_file();
+                    return Ok(());
+                }
+            };
             if n_skip == 0 {
                 break;
             }
@@ -242,6 +258,7 @@ impl io::Read for MultifileReader<'_> {
                                     strip_errno(&e)
                                 );
                                 self.any_err = true;
+                                self.read_err = true;
                                 break;
                             }
                         };
@@ -258,9 +275,20 @@ impl io::Read for MultifileReader<'_> {
     }
 }
 
+impl MultifileReader<'_> {
+    /// Whether every file failed to open, so that there is nothing to dump at all.
+    pub fn nothing_opened(&self) -> bool {
+        self.curr_file.is_none() && self.any_err
+    }
+}
+
 impl HasError for MultifileReader<'_> {
     fn has_error(&self) -> bool {
         self.any_err
+    }
+
+    fn read_failed(&self) -> bool {
+        self.read_err
     }
 }
 

@@ -59,6 +59,25 @@ pub trait ChecksumCommand {
     fn with_debug(self) -> Self;
 }
 
+/// The algorithms `--algorithm` takes, in GNU's order (which its error for an invalid one lists
+/// them in); the ones GNU lacks are accepted but not listed.
+fn algorithm_values() -> clap::builder::PossibleValuesParser {
+    const GNU_ORDER: [&str; 14] = [
+        "bsd", "sysv", "crc", "crc32b", "md5", "sha1", "sha224", "sha256", "sha384", "sha512",
+        "sha2", "sha3", "blake2b", "sm3",
+    ];
+    let extra = SUPPORTED_ALGORITHMS
+        .into_iter()
+        .filter(|name| !GNU_ORDER.contains(name))
+        .map(|name| clap::builder::PossibleValue::new(name).hide(true));
+    GNU_ORDER
+        .into_iter()
+        .map(clap::builder::PossibleValue::new)
+        .chain(extra)
+        .collect::<Vec<_>>()
+        .into()
+}
+
 impl ChecksumCommand for Command {
     fn with_algo(self) -> Self {
         self.arg(
@@ -67,7 +86,7 @@ impl ChecksumCommand for Command {
                 .short('a')
                 .help(translate!("ck-common-help-algorithm"))
                 .value_name("ALGORITHM")
-                .value_parser(SUPPORTED_ALGORITHMS),
+                .value_parser(algorithm_values()),
         )
     }
 

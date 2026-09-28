@@ -685,6 +685,11 @@ fn unexpand(options: &Options) -> UResult<()> {
 
     for file in &options.files {
         if let Err(e) = unexpand_file(file, &mut output, options, lastcol, tab_config, &mut buf) {
+            // Flush this file's own output before reporting the error: GNU's error for one
+            // operand (e.g. the next one not existing) is only ever seen after an earlier
+            // operand's output, and a `BufWriter` held open across the whole loop would
+            // otherwise let this immediate stderr write overtake that buffered stdout content.
+            output.flush()?;
             show!(e);
             set_exit_code(1);
         }

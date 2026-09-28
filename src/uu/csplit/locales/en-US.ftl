@@ -20,6 +20,7 @@ csplit-error-line-number-is-zero = 0: line number must be greater than zero
 csplit-error-line-number-smaller-than-previous = line number '{ $current }' is smaller than preceding line number, { $previous }
 csplit-error-invalid-pattern = { $pattern }: invalid pattern
 csplit-error-invalid-number = invalid number: { $number }
+csplit-error-integer-expected-after-delimiter = { $pattern }: integer expected after delimiter
 csplit-error-suffix-format-incorrect = incorrect conversion specification in suffix
 csplit-error-suffix-format-too-many-percents = too many % conversion specifications in suffix
 csplit-error-not-regular-file = { $file } is not a regular file

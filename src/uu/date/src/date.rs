@@ -35,6 +35,26 @@ use windows_sys::Win32::{Foundation::SYSTEMTIME, System::SystemInformation::SetS
 
 use uucore::parser::shortcut_value_parser::ShortcutValueParser;
 
+/// The local time zone as `TZ` says it now. jiff caches the system zone for minutes, but an
+/// embedder that runs this utility in-process may change `TZ` between calls; WASI has no system
+/// zone of its own, so an unset `TZ` means UTC there.
+fn local_zone() -> TimeZone {
+    match std::env::var_os("TZ") {
+        #[cfg(target_os = "wasi")]
+        None => TimeZone::UTC,
+        #[cfg(not(target_os = "wasi"))]
+        None => TimeZone::try_system().unwrap_or(TimeZone::UTC),
+        Some(tz) if tz.is_empty() => TimeZone::UTC,
+        Some(tz) => {
+            let tz = tz.to_string_lossy();
+            let name = tz.strip_prefix(':').unwrap_or(&tz);
+            TimeZone::get(name)
+                .or_else(|_| TimeZone::posix(name))
+                .unwrap_or(TimeZone::UTC)
+        }
+    }
+}
+
 /// OHOS helper: pass through the system time zone ID returned by
 /// TimeService (OH_TimeService_GetTimeZone, e.g. "Asia/Shanghai") and
 /// resolve it against the embedded IANA tzdata (jiff-tzdb) so that
@@ -108,7 +128,15 @@ enum DateError {
     SettingDateNotSupportedRedox,
 }
 
-impl UError for DateError {}
+impl UError for DateError {
+    // GNU follows a misused operand with where to read more.
+    fn usage(&self) -> bool {
+        matches!(
+            self,
+            Self::ExtraOperand { .. } | Self::FormatMissingPlus { .. }
+        )
+    }
+}
 
 /// Settings for this program, parsed from the command line
 struct Settings {
@@ -351,7 +379,20 @@ fn parse_military_timezone_with_offset(s: &str) -> Option<(i32, DayDelta)> {
 pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     let matches = uucore::clap_localization::handle_clap_result(uu_app(), args)?;
 
-    let date_source = if let Some(date_os) = matches.get_one::<OsString>(OPT_DATE) {
+    // GNU's check, in place of clap's conflict error: at most one of the ways to name dates.
+    if [OPT_DATE, OPT_FILE, OPT_REFERENCE, OPT_RESOLUTION]
+        .iter()
+        .filter(|id| matches.value_source(id) == Some(clap::parser::ValueSource::CommandLine))
+        .count()
+        > 1
+    {
+        return Err(uucore::error::UUsageError::new(
+            1,
+            translate!("date-error-dates-mutually-exclusive"),
+        ));
+    }
+
+    let mut date_source = if let Some(date_os) = matches.get_one::<OsString>(OPT_DATE) {
         // Convert OsString to String, handling invalid UTF-8 with GNU-compatible error
         let date = date_os.to_str().ok_or_else(|| DateError::InvalidDate {
             date: operand_for_error(date_os),
@@ -426,14 +467,17 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         }
         #[cfg(not(target_env = "ohos"))]
         {
-            Zoned::now()
+            Timestamp::now().to_zoned(local_zone())
         }
     };
 
+    // Like GNU, `-s` prints the date it set, and still does when setting it fails.
+    let mut set_error = None;
     if let Some(input) = matches.get_one::<String>(OPT_SET) {
         match parse_date(input, &now, DebugOptions::new(debug_mode, true), false) {
             Ok(ParsedDateTime::InRange(date)) => {
-                return set_system_datetime(convert_for_set(date, utc));
+                set_error = set_system_datetime(convert_for_set(date, utc)).err();
+                date_source = DateSource::Human(input.clone());
             }
             Ok(ParsedDateTime::Extended(_)) | Err(_) => {
                 return Err(Box::new(DateError::InvalidDate {
@@ -608,7 +652,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
             #[cfg(target_env = "ohos")]
             let date = ts.to_zoned(ohos_system_zone());
             #[cfg(not(target_env = "ohos"))]
-            let date = ts.to_zoned(TimeZone::try_system().unwrap_or(TimeZone::UTC));
+            let date = ts.to_zoned(local_zone());
             let iter = std::iter::once(Ok(ParsedDateTime::InRange(date)));
             Box::new(iter)
         }
@@ -617,7 +661,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
             #[cfg(target_env = "ohos")]
             let date = resolution.to_zoned(ohos_system_zone());
             #[cfg(not(target_env = "ohos"))]
-            let date = resolution.to_zoned(TimeZone::system());
+            let date = resolution.to_zoned(local_zone());
             let iter = std::iter::once(Ok(ParsedDateTime::InRange(date)));
             Box::new(iter)
         }
@@ -683,7 +727,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     }
 
     stdout.flush().map_err(DateError::Write)?;
-    Ok(())
+    set_error.map_or(Ok(()), Err)
 }
 
 pub fn uu_app() -> Command {
@@ -710,7 +754,6 @@ pub fn uu_app() -> Command {
                 .value_name("DATEFILE")
                 .value_hint(clap::ValueHint::FilePath)
                 .value_parser(clap::value_parser!(OsString))
-                .conflicts_with(OPT_DATE)
                 .overrides_with(OPT_FILE)
                 .help(translate!("date-help-file")),
         )
@@ -719,8 +762,9 @@ pub fn uu_app() -> Command {
                 .short('I')
                 .long(OPT_ISO_8601)
                 .value_name("FMT")
+                // GNU's order, which its error for an invalid precision lists them in.
                 .value_parser(ShortcutValueParser::new([
-                    DATE, HOURS, MINUTES, SECONDS, NS,
+                    HOURS, MINUTES, DATE, SECONDS, NS,
                 ]))
                 .num_args(0..=1)
                 .default_missing_value(OPT_DATE)
@@ -729,7 +773,6 @@ pub fn uu_app() -> Command {
         .arg(
             Arg::new(OPT_RESOLUTION)
                 .long(OPT_RESOLUTION)
-                .conflicts_with_all([OPT_DATE, OPT_FILE])
                 .overrides_with(OPT_RESOLUTION)
                 .help(translate!("date-help-resolution"))
                 .action(ArgAction::SetTrue),
@@ -764,7 +807,6 @@ pub fn uu_app() -> Command {
                 .value_name("FILE")
                 .value_hint(clap::ValueHint::AnyPath)
                 .value_parser(clap::value_parser!(OsString))
-                .conflicts_with_all([OPT_DATE, OPT_FILE, OPT_RESOLUTION])
                 .overrides_with(OPT_REFERENCE)
                 .help(translate!("date-help-reference")),
         )
@@ -851,6 +893,63 @@ fn substitute_epoch_seconds(fmt: &str, date: &Zoned) -> String {
 /// when a specifier letter follows it. A dangling `%O` (at the end of the
 /// string, or followed by a non-letter) stays literal, as does any `O`
 /// that merely follows the `%%` escape.
+/// Reads a format as GNU's strftime does where jiff's differs: the `E` modifier is dropped
+/// before the conversions it applies to (in the C locale they are the plain ones), and a
+/// conversion GNU does not know is printed as written rather than taking jiff's meaning.
+fn gnu_conversions(fmt: &str) -> String {
+    const KNOWN: &[u8] = b"aAbBcCdDeFgGhHIjklmMnNpPqrRsStTuUVwWxXyYzZ%";
+    if !fmt.contains('%') {
+        return fmt.to_string();
+    }
+    let bytes = fmt.as_bytes();
+    let mut out = String::with_capacity(fmt.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'%' {
+            let len = fmt[i..].chars().next().map_or(1, char::len_utf8);
+            out.push_str(&fmt[i..i + len]);
+            i += len;
+            continue;
+        }
+        // Flags, width and colons, then the conversion letter.
+        let mut end = i + 1;
+        while end < bytes.len() && b"_0^#+-".contains(&bytes[end]) {
+            end += 1;
+        }
+        while end < bytes.len() && bytes[end].is_ascii_digit() {
+            end += 1;
+        }
+        while end < bytes.len() && bytes[end] == b':' {
+            end += 1;
+        }
+        let mut spec = &fmt[i..end];
+        let mut owned;
+        if bytes.get(end) == Some(&b'E')
+            && bytes.get(end + 1).is_some_and(|c| b"cCxXyY".contains(c))
+        {
+            owned = spec.to_string();
+            owned.push(char::from(bytes[end + 1]));
+            spec = &owned;
+            end += 2;
+        } else if let Some(&letter) = bytes.get(end) {
+            if letter == b'O' || KNOWN.contains(&letter) || bytes[end - 1] == b':' {
+                owned = fmt[i..=end].to_string();
+                spec = &owned;
+                end += 1;
+            } else if letter.is_ascii_alphabetic() {
+                // Unknown to GNU: shown as written.
+                out.push_str("%%");
+                out.push_str(&fmt[i + 1..=end]);
+                i = end + 1;
+                continue;
+            }
+        }
+        out.push_str(spec);
+        i = end;
+    }
+    out
+}
+
 fn strip_o_modifier(fmt: &str) -> String {
     if !fmt.contains("%O") {
         return fmt.to_string();
@@ -1053,7 +1152,7 @@ fn format_date_with_locale_aware_months(
     // negative infinity (e.g. `@-1.5` → `-2`, not `-1`). Every other field jiff
     // produces already agrees with GNU, so only `%s` needs correcting; rewrite it
     // to the floored epoch second before jiff sees the format string.
-    let fmt_owned = strip_o_modifier(&substitute_epoch_seconds(fmt, date));
+    let fmt_owned = strip_o_modifier(&gnu_conversions(&substitute_epoch_seconds(fmt, date)));
     let fmt = fmt_owned.as_str();
 
     // Check if format string has GNU modifiers (width/flags) and format if present
@@ -1267,17 +1366,142 @@ fn parse_dates_from_reader<R: Read + 'static>(
 }
 
 /// Parse a string into either an in-range [`Zoned`] value or an extended date.
+/// Rewrites a date string where GNU's grammar reads it differently from `parse_datetime`:
+///
+/// - A signed number right after a time of day is that time's zone (`12:00 +3 hours` is noon at
+///   UTC+3, then an hour on), not a relative amount: it is glued to the time as `+HH:MM`.
+/// - A day of the week is ignored when a calendar date is given (`2024-01-01 last friday` is
+///   that date), so it is dropped.
+fn gnu_date_string(input: &str) -> Cow<'_, str> {
+    const WEEKDAYS: [&str; 7] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+    const ORDINALS: [&str; 14] = [
+        "last", "this", "next", "first", "third", "fourth", "fifth", "sixth", "seventh", "eighth",
+        "ninth", "tenth", "eleventh", "twelfth",
+    ];
+    const MONTHS: [&str; 24] = [
+        "jan",
+        "january",
+        "feb",
+        "february",
+        "mar",
+        "march",
+        "apr",
+        "april",
+        "may",
+        "jun",
+        "june",
+        "jul",
+        "july",
+        "aug",
+        "august",
+        "sep",
+        "sept",
+        "september",
+        "oct",
+        "october",
+        "nov",
+        "november",
+        "dec",
+        "december",
+    ];
+    let words: Vec<&str> = input.split_whitespace().collect();
+    let lower = |word: &str| word.trim_end_matches([',', '.']).to_ascii_lowercase();
+    let is_weekday = |word: &str| {
+        let word = lower(word);
+        WEEKDAYS.iter().any(|day| {
+            word.starts_with(day)
+                && matches!(
+                    &word[3..],
+                    "" | "day" | "s" | "sday" | "nesday" | "rsday" | "urday" | "rs" | "r" | "urs"
+                )
+        })
+    };
+    let is_date = |word: &str| {
+        let word = lower(word);
+        let digits_and = |separator: char| {
+            let parts: Vec<&str> = word.split(separator).collect();
+            parts.len() >= 2
+                && parts
+                    .iter()
+                    .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+        };
+        digits_and('-') && word.split('-').count() == 3
+            || digits_and('/')
+            || MONTHS.contains(&word.as_str())
+    };
+    let mut out: Vec<String> = Vec::with_capacity(words.len());
+    let dates_seen = words.iter().any(|word| is_date(word));
+    let mut changed = false;
+    let mut i = 0;
+    while i < words.len() {
+        let word = words[i];
+        // A day of the week (with its ordinal) next to a calendar date.
+        if dates_seen && is_weekday(word) {
+            if out.last().is_some_and(|last| {
+                let last = lower(last);
+                ORDINALS.contains(&last.as_str())
+                    || last
+                        .trim_start_matches(['+', '-'])
+                        .bytes()
+                        .all(|b| b.is_ascii_digit())
+                        && !last.is_empty()
+            }) {
+                out.pop();
+            }
+            changed = true;
+            i += 1;
+            continue;
+        }
+        // A time of day, then a signed number: the zone.
+        let is_time = {
+            let clock = word.split(['.']).next().unwrap_or(word);
+            let parts: Vec<&str> = clock.split(':').collect();
+            (2..=3).contains(&parts.len())
+                && parts.iter().all(|part| {
+                    (1..=2).contains(&part.len()) && part.bytes().all(|b| b.is_ascii_digit())
+                })
+        };
+        if is_time
+            && let Some(next) = words.get(i + 1)
+            && let Some(digits) = next.strip_prefix(['+', '-'])
+            && (1..=4).contains(&digits.len())
+            && digits.bytes().all(|b| b.is_ascii_digit())
+        {
+            let number: u32 = digits.parse().unwrap_or(0);
+            let (hours, minutes) = if digits.len() <= 2 {
+                (number, 0)
+            } else {
+                (number / 100, number % 100)
+            };
+            let sign = &next[..1];
+            out.push(format!("{word}{sign}{hours:02}:{minutes:02}"));
+            changed = true;
+            i += 2;
+            continue;
+        }
+        out.push(word.to_string());
+        i += 1;
+    }
+    if changed {
+        Cow::Owned(out.join(" "))
+    } else {
+        Cow::Borrowed(input)
+    }
+}
+
 fn parse_date<S: AsRef<str>>(
     s: S,
     now: &Zoned,
     dbg_opts: DebugOptions,
     allow_extended: bool,
 ) -> Result<ParsedDateTime, (String, parse_datetime::ParseDateTimeError)> {
-    let input_str = s.as_ref();
+    let original = s.as_ref();
 
     if dbg_opts.debug {
-        let _ = writeln!(stderr(), "date: input string: {input_str}");
+        let _ = writeln!(stderr(), "date: input string: {original}");
     }
+    let rewritten = gnu_date_string(original);
+    let input_str = rewritten.as_ref();
 
     // First, try to parse any timezone abbreviations
     if let Some(zoned) = try_parse_with_abbreviation(input_str, now) {
@@ -1339,16 +1563,22 @@ fn parse_date<S: AsRef<str>>(
         }
         Ok(ParsedDateTime::Extended(date)) if allow_extended => Ok(ParsedDateTime::Extended(date)),
         Ok(ParsedDateTime::Extended(_)) => Err((
-            input_str.into(),
+            original.into(),
             parse_datetime::ParseDateTimeError::InvalidInput,
         )),
-        Err(e) => Err((input_str.into(), e)),
+        Err(e) => Err((original.into(), e)),
     }
 }
 
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(any(unix, windows, target_os = "wasi")))]
 fn get_clock_resolution() -> Timestamp {
     unimplemented!("getting clock resolution not implemented (unsupported target)");
+}
+
+#[cfg(target_os = "wasi")]
+fn get_clock_resolution() -> Timestamp {
+    // WASI's wall clock reports nanoseconds; GNU prints the same 1ns on Linux.
+    Timestamp::constant(0, 1)
 }
 
 #[cfg(all(unix, not(target_os = "redox")))]
@@ -1385,9 +1615,22 @@ fn get_clock_resolution() -> Timestamp {
     Timestamp::constant(0, 100)
 }
 
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(any(unix, windows, target_os = "wasi")))]
 fn set_system_datetime(_date: Zoned) -> UResult<()> {
     unimplemented!("setting date not implemented (unsupported target)");
+}
+
+#[cfg(target_os = "wasi")]
+/// WASI cannot set the system clock; fail as `date -s` does for an unprivileged user. (An
+/// `io::Error` from `EPERM` would print as "Permission denied" here, so the text is spelled out.)
+fn set_system_datetime(_date: Zoned) -> UResult<()> {
+    Err(uucore::error::USimpleError::new(
+        1,
+        format!(
+            "{}: Operation not permitted",
+            translate!("date-error-cannot-set-date")
+        ),
+    ))
 }
 
 /// Convert a parsed date for the system clock.

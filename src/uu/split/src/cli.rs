@@ -24,6 +24,7 @@ pub mod options {
     pub const HEX_SUFFIXES_SHORT: &str = "-x";
     pub const SUFFIX_LENGTH: &str = "suffix-length";
     pub const VERBOSE: &str = "verbose";
+    pub const UNBUFFERED: &str = "unbuffered";
     pub const SEPARATOR: &str = "separator";
     pub const ELIDE_EMPTY_FILES: &str = "elide-empty-files";
     pub const IO_BLKSIZE: &str = "-io-blksize";
@@ -160,6 +161,15 @@ pub fn uu_app() -> Command {
             Arg::new(options::VERBOSE)
                 .long(options::VERBOSE)
                 .help(translate!("split-help-verbose"))
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            // GNU's `-u` copies input to output as it arrives with `-n r/...`; output here is
+            // written as it is split in any case, so it changes nothing.
+            Arg::new(options::UNBUFFERED)
+                .short('u')
+                .long(options::UNBUFFERED)
+                .help("immediately copy input to output with '-n r/...'")
                 .action(ArgAction::SetTrue),
         )
         .arg(
