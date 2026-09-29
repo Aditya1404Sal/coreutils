@@ -1779,7 +1779,7 @@ fn source_times(source_metadata: &Metadata, context: &str) -> CopyResult<(FileTi
 ///
 /// On WASI `filetime` cannot set a symlink's times at all, and sets a file's through a descriptor
 /// it opens; when that descriptor names a directory, a Linux host refuses it new times (EBADF).
-/// `utimensat` on the path, as touch uses, works for every kind of file.
+/// `utimensat` on the path, as touch uses, sets both.
 #[cfg(target_os = "wasi")]
 fn set_times_by_path(
     path: &Path,
@@ -2052,8 +2052,14 @@ pub(crate) fn copy_attributes(
         };
         #[cfg(not(unix))]
         let no_open = dest.is_symlink();
+        // Other files keep the descriptor, through which the embedding shell refuses given
+        // times to a device, as a host does to a user who does not own it.
         #[cfg(target_os = "wasi")]
-        set_times_by_path(dest, atime, mtime, no_open)?;
+        if no_open || dest.is_dir() {
+            set_times_by_path(dest, atime, mtime, no_open)?;
+        } else {
+            filetime::set_file_times(dest, atime, mtime)?;
+        }
         #[cfg(not(target_os = "wasi"))]
         if no_open {
             filetime::set_symlink_file_times(dest, atime, mtime)?;
