@@ -1774,6 +1774,36 @@ fn source_times(source_metadata: &Metadata, context: &str) -> CopyResult<(FileTi
     }
 }
 
+/// Sets `path`'s access and modification times by path, not following a final symlink when
+/// `nofollow` is set.
+///
+/// On WASI `filetime` cannot set a symlink's times at all, and sets a file's through a descriptor
+/// it opens; when that descriptor names a directory, a Linux host refuses it new times (EBADF).
+/// `utimensat` on the path, as touch uses, works for every kind of file.
+#[cfg(target_os = "wasi")]
+fn set_times_by_path(
+    path: &Path,
+    atime: FileTime,
+    mtime: FileTime,
+    nofollow: bool,
+) -> io::Result<()> {
+    use rustix::fs::{AtFlags, CWD, Timespec, Timestamps, utimensat};
+    let timespec = |time: FileTime| Timespec {
+        tv_sec: time.unix_seconds(),
+        tv_nsec: time.nanoseconds() as _,
+    };
+    let timestamps = Timestamps {
+        last_access: timespec(atime),
+        last_modification: timespec(mtime),
+    };
+    let flags = if nofollow {
+        AtFlags::SYMLINK_NOFOLLOW
+    } else {
+        AtFlags::empty()
+    };
+    utimensat(CWD, path, &timestamps, flags).map_err(io::Error::from)
+}
+
 fn handle_preserve<F: Fn() -> CopyResult<()>>(p: Preserve, f: F) -> CopyResult<()> {
     match p {
         Preserve::No { .. } => {}
@@ -2022,6 +2052,9 @@ pub(crate) fn copy_attributes(
         };
         #[cfg(not(unix))]
         let no_open = dest.is_symlink();
+        #[cfg(target_os = "wasi")]
+        set_times_by_path(dest, atime, mtime, no_open)?;
+        #[cfg(not(target_os = "wasi"))]
         if no_open {
             filetime::set_symlink_file_times(dest, atime, mtime)?;
         } else {
